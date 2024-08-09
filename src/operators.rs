@@ -71,7 +71,29 @@ pub fn masked_softmax(y: &mut Tensor<f32>) {
 }
 
 pub fn rms_norm(y: &mut Tensor<f32>, x: &Tensor<f32>, w: &Tensor<f32>, epsilon: f32) {
-    todo!("实现 rms_norm，计算前做一些必要的检查会帮助你后续调试")
+    assert!(y.shape() == x.shape());
+    assert!(x.shape().len() == w.shape().len() + 1 || w.size() == 1 && x.shape().len() == 1);
+    assert!(w
+        .shape()
+        .iter()
+        .zip(x.shape().iter())
+        .all(|(&w_s, &x_s)| w_s == x_s));
+
+    let y_data = unsafe { y.data_mut() };
+    let x_data = x.data();
+    let w_data = w.data();
+
+    let chunk_size = w.shape().iter().product();
+    let res = x_data.chunks_exact(chunk_size).map(|x_i| {
+        let square_sum = x_i.iter().map(|&x_ij| x_ij * x_ij).sum::<f32>();
+        let norm = (square_sum / x_i.len() as f32 + epsilon).sqrt();
+        let prod = x_i.iter().zip(w_data.iter()).map(|(&x, &w)| x * w);
+        prod.map(move |p| p / norm)
+    });
+    y_data
+        .chunks_exact_mut(chunk_size)
+        .zip(res)
+        .for_each(|(y_i, y_i_res)| y_i.iter_mut().zip(y_i_res).for_each(|(y_ij, r)| *y_ij = r));
 }
 
 // y = sigmoid(x) * x * y
