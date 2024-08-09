@@ -77,13 +77,20 @@ pub fn rms_norm(y: &mut Tensor<f32>, x: &Tensor<f32>, w: &Tensor<f32>, epsilon: 
 // y = sigmoid(x) * x * y
 // hint: this is an element-wise operation
 pub fn silu(y: &mut Tensor<f32>, x: &Tensor<f32>) {
-    // let len = y.size();
-    // assert!(len == x.size());
+    assert!(y.size() == x.size());
 
-    // let _y = unsafe { y.data_mut() };
-    // let _x = x.data();
+    let y_data = unsafe { y.data_mut() };
+    let x_data = x.data();
 
-    todo!("实现 silu，这里给了一些前期准备工作的提示，你可以参考")
+    fn silu(x: &f32) -> f32 {
+        let x = *x;
+        x / (1.0 + (-x).exp())
+    }
+    let silu_x = x_data.iter().map(silu);
+    y_data
+        .iter_mut()
+        .zip(silu_x)
+        .for_each(|(y, x)| *y = x * (*y));
 }
 
 // C = beta * C + alpha * A @ B^T
