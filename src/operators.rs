@@ -76,7 +76,7 @@ pub fn rms_norm(y: &mut Tensor<f32>, x: &Tensor<f32>, w: &Tensor<f32>, epsilon: 
     assert!(w
         .shape()
         .iter()
-        .zip(x.shape().iter())
+        .zip(x.shape().iter().rev())
         .all(|(&w_s, &x_s)| w_s == x_s));
 
     let chunk_size = w.shape().iter().product();

@@ -85,6 +85,18 @@ impl<T: Copy + Clone + Default> Tensor<T> {
             length: new_length,
         }
     }
+
+    pub fn copy_from_tensor(&mut self, other: &Self) {
+        assert!(self.shape() == other.shape());
+        let data = unsafe { self.data_mut() };
+        data.copy_from_slice(other.data());
+    }
+
+    pub fn deep_copy(&self) -> Self {
+        let mut copy = Self::default(self.shape());
+        copy.copy_from_tensor(self);
+        copy
+    }
 }
 
 // Some helper functions for testing and debugging
@@ -111,6 +123,14 @@ impl Tensor<f32> {
             let start = i * dim;
             println!("{:?}", &self.data()[start..][..dim]);
         }
+    }
+
+    pub fn plus_(&mut self, other: &Self) {
+        assert!(self.shape() == other.shape());
+        let data = unsafe { self.data_mut() };
+        data.iter_mut()
+            .zip(other.data())
+            .for_each(|(x, &y)| *x += y);
     }
 }
 
