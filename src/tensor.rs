@@ -27,9 +27,33 @@ impl<T: Copy + Clone + Default> Tensor<T> {
         &self.data[self.offset..][..self.length]
     }
 
+    fn check_idx(&self, idx: &[usize]) {
+        assert!(self.shape().len() == idx.len());
+        assert!(self.shape().iter().zip(idx.iter()).all(|(&s, &i)| i < s));
+    }
+    pub fn to_offset(&self, idx: &[usize]) -> usize {
+        self.check_idx(idx);
+        idx.iter()
+            .zip(self.shape())
+            .fold(0, |acc, (&i, &dim)| acc * dim + i)
+    }
+    pub fn data_at(&self, idx: &[usize]) -> T {
+        self.data()[self.to_offset(idx)]
+    }
+
     pub unsafe fn data_mut(&mut self) -> &mut [T] {
         let ptr = self.data.as_ptr().add(self.offset) as *mut T;
         slice::from_raw_parts_mut(ptr, self.length)
+    }
+
+    /// Mutates the tensor at a given index,
+    /// and returns the previous value.
+    pub unsafe fn with_data_mut_at(&mut self, idx: &[usize], op: impl FnOnce(&T) -> T) -> T {
+        let offset = self.to_offset(idx);
+        let ptr = self.data.as_ptr().add(self.offset + offset) as *mut T;
+        let prev_val = ptr.read();
+        ptr.write(op(&prev_val));
+        prev_val
     }
 
     pub fn shape(&self) -> &Vec<usize> {
@@ -61,8 +85,6 @@ impl<T: Copy + Clone + Default> Tensor<T> {
             length: new_length,
         }
     }
-
-
 }
 
 // Some helper functions for testing and debugging
@@ -74,12 +96,15 @@ impl Tensor<f32> {
         }
         let a = self.data();
         let b = other.data();
-        
+
         return a.iter().zip(b).all(|(x, y)| float_eq(x, y, rel));
     }
     #[allow(unused)]
-    pub fn print(&self){
-        println!("shpae: {:?}, offset: {}, length: {}", self.shape, self.offset, self.length);
+    pub fn print(&self) {
+        println!(
+            "shpae: {:?}, offset: {}, length: {}",
+            self.shape, self.offset, self.length
+        );
         let dim = self.shape()[self.shape().len() - 1];
         let batch = self.length / dim;
         for i in 0..batch {
@@ -92,4 +117,30 @@ impl Tensor<f32> {
 #[inline]
 pub fn float_eq(x: &f32, y: &f32, rel: f32) -> bool {
     (x - y).abs() <= rel * (x.abs() + y.abs()) / 2.0
+}
+
+#[test]
+fn test_data_at_idx() {
+    let t = Tensor::<f32>::new(vec![1., 2., 3., 4., 5., 6.], &vec![2, 3]);
+    // [[1., 2., 3.],
+    // [4., 5., 6.]]
+    assert!(t.data_at(&[0, 0]) == 1.);
+    assert!(t.data_at(&[0, 1]) == 2.);
+    assert!(t.data_at(&[0, 2]) == 3.);
+    assert!(t.data_at(&[1, 0]) == 4.);
+}
+
+#[test]
+fn test_mutate_dat_at_idx() {
+    let mut t = Tensor::<f32>::new(vec![1., 2., 3., 4., 5., 6.], &vec![2, 3]);
+    // [[1., 2., 3.],
+    // [4., 5., 6.]]
+    assert!(unsafe { t.with_data_mut_at(&[0, 0], |x| x + 1.) } == 1.);
+    assert!(unsafe { t.with_data_mut_at(&[0, 1], |x| x + 1.) } == 2.);
+    assert!(unsafe { t.with_data_mut_at(&[0, 2], |x| x + 1.) } == 3.);
+    assert!(unsafe { t.with_data_mut_at(&[1, 0], |x| x + 1.) } == 4.);
+    assert!(t.data_at(&[0, 0]) == 2.);
+    assert!(t.data_at(&[0, 1]) == 3.);
+    assert!(t.data_at(&[0, 2]) == 4.);
+    assert!(t.data_at(&[1, 0]) == 5.);
 }

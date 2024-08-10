@@ -79,17 +79,14 @@ pub fn rms_norm(y: &mut Tensor<f32>, x: &Tensor<f32>, w: &Tensor<f32>, epsilon: 
         .zip(x.shape().iter())
         .all(|(&w_s, &x_s)| w_s == x_s));
 
-    let y_data = unsafe { y.data_mut() };
-    let x_data = x.data();
-    let w_data = w.data();
-
     let chunk_size = w.shape().iter().product();
-    let res = x_data.chunks_exact(chunk_size).map(|x_i| {
+    let res = x.data().chunks_exact(chunk_size).map(|x_i| {
         let square_sum = x_i.iter().map(|&x_ij| x_ij * x_ij).sum::<f32>();
         let norm = (square_sum / x_i.len() as f32 + epsilon).sqrt();
-        let prod = x_i.iter().zip(w_data.iter()).map(|(&x, &w)| x * w);
+        let prod = x_i.iter().zip(w.data().iter()).map(|(&x, &w)| x * w);
         prod.map(move |p| p / norm)
     });
+    let y_data = unsafe { y.data_mut() };
     y_data
         .chunks_exact_mut(chunk_size)
         .zip(res)
@@ -116,9 +113,37 @@ pub fn silu(y: &mut Tensor<f32>, x: &Tensor<f32>) {
 }
 
 // C = beta * C + alpha * A @ B^T
+// Assume that A is of shape (m, k), B is of shape (n, k), C is of shape (m, n).
 // hint: You don't need to do an explicit transpose of B
 pub fn matmul_transb(c: &mut Tensor<f32>, beta: f32, a: &Tensor<f32>, b: &Tensor<f32>, alpha: f32) {
-    todo!("实现 matmul_transb，计算前做一些必要的检查会帮助你后续调试");
+    assert!(c.shape().len() == 2);
+    assert!(a.shape().len() == 2);
+    assert!(b.shape().len() == 2);
+    assert!(a.shape()[1] == b.shape()[1]);
+    assert!(c.shape()[0] == a.shape()[0]);
+    assert!(c.shape()[1] == b.shape()[0]);
+    let m: usize = a.shape()[0];
+    let n = b.shape()[0];
+    let k = a.shape()[1];
+
+    fn cartesian_product<I, J>(iter1: I, iter2: J) -> impl Iterator<Item = (I::Item, J::Item)>
+    where
+        I: Iterator + Clone,
+        J: Iterator + Clone,
+        I::Item: Clone,
+        J::Item: Clone,
+    {
+        iter1.flat_map(move |item1| iter2.clone().map(move |item2| (item1.clone(), item2)))
+    }
+
+    cartesian_product(0..m, 0..n).for_each(|(i, j)| {
+        let a_vec = (0..k).map(|l| a.data_at(&[i, l]));
+        let b_vec = (0..k).map(|l| b.data_at(&[j, l]));
+        let prod = a_vec.zip(b_vec).map(|(a, b)| a * b).sum::<f32>();
+        unsafe {
+            c.with_data_mut_at(&[i, j], |&prev| alpha * prod + beta * prev);
+        }
+    });
 }
 
 // Dot product of two tensors (treated as vectors)
@@ -232,6 +257,9 @@ fn test_matmul_transb() {
     let mut c = Tensor::<f32>::new(vec![1., 2., 3., 4.], &vec![2, 2]);
     let a = Tensor::<f32>::new(vec![1., 2., 3., 4., 5., 6.], &vec![2, 3]);
     let b = Tensor::<f32>::new(vec![1., 2., 3., 4., 5., 6.], &vec![2, 3]);
+    //          [[1,2,3],  [[1,4],
+    //  a@b^T =  [4,5,6]] x [2,5],  = [14,32]
+    //                      [3,6]]    [32,77]
     matmul_transb(&mut c, 1., &a, &b, 1.);
     assert!(c.close_to(
         &Tensor::<f32>::new(vec![15., 34., 35., 81.], &vec![2, 2]),

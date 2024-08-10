@@ -17,12 +17,6 @@ fn main() {
     let binding = tokenizer.encode(input, true).unwrap();
     let input_ids = binding.get_ids();
     print!("\n{}", input);
-    let output_ids = llama.generate(
-        input_ids,
-        500,
-        0.9,
-        4,
-        1.,
-    );
+    let output_ids = llama.generate(input_ids, 500, 0.9, 4, 1.);
     println!("{}", tokenizer.decode(&output_ids, true).unwrap());
 }
