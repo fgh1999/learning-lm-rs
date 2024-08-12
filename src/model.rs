@@ -43,7 +43,7 @@ impl Llama<f32> {
             eps: config.rms_norm_eps,
             rope_theta: config.rope_theta,
             max_seq_len: config.max_position_embeddings,
-            params: params,
+            params,
             bos_token_id: config.bos_token_id,
             eos_token_id: config.eos_token_id,
         }
