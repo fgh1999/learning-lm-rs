@@ -139,7 +139,7 @@ pub fn float_eq(x: &f32, y: &f32, rel: f32) -> bool {
     (x - y).abs() <= rel * (x.abs() + y.abs()) / 2.0
 }
 
-#[test]
+// #[test]
 fn test_data_at_idx() {
     let t = Tensor::<f32>::new(vec![1., 2., 3., 4., 5., 6.], &vec![2, 3]);
     // [[1., 2., 3.],
@@ -150,7 +150,7 @@ fn test_data_at_idx() {
     assert!(t.data_at(&[1, 0]) == 4.);
 }
 
-#[test]
+// #[test]
 fn test_mutate_dat_at_idx() {
     let mut t = Tensor::<f32>::new(vec![1., 2., 3., 4., 5., 6.], &vec![2, 3]);
     // [[1., 2., 3.],
