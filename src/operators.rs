@@ -2,10 +2,10 @@ use crate::tensor::Tensor;
 
 // get (row) vectors from a 2D table given a list of indices
 pub fn gather(y: &mut Tensor<f32>, indices: &Tensor<u32>, table: &Tensor<f32>) {
-    let length = indices.size();
     let table_shape = table.shape();
     assert!(table_shape.len() == 2);
     let dim = table_shape[1];
+    let length = indices.size();
     assert!(y.size() == length * dim);
     for i in 0..length {
         let src = &table.data()[indices.data()[i] as usize * dim..][..dim];
@@ -54,7 +54,7 @@ pub fn masked_softmax(y: &mut Tensor<f32>) {
 
             let max = data[offset..offset + boundary]
                 .iter()
-                .fold(data[offset], |a, b| a.max(*b));
+                .fold(data[offset], |a, &b| a.max(b));
 
             let sum = (0..boundary)
                 .map(|j| {
@@ -106,10 +106,7 @@ pub fn silu(y: &mut Tensor<f32>, x: &Tensor<f32>) {
         x / (1.0 + (-x).exp())
     }
     let silu_x = x_data.iter().map(silu);
-    y_data
-        .iter_mut()
-        .zip(silu_x)
-        .for_each(|(y, x)| *y = x * (*y));
+    y_data.iter_mut().zip(silu_x).for_each(|(y, x)| *y *= x);
 }
 
 // C = beta * C + alpha * A @ B^T
@@ -126,17 +123,7 @@ pub fn matmul_transb(c: &mut Tensor<f32>, beta: f32, a: &Tensor<f32>, b: &Tensor
     let n = b.shape()[0];
     let k = a.shape()[1];
 
-    fn cartesian_product<I, J>(iter1: I, iter2: J) -> impl Iterator<Item = (I::Item, J::Item)>
-    where
-        I: Iterator + Clone,
-        J: Iterator + Clone,
-        I::Item: Clone,
-        J::Item: Clone,
-    {
-        iter1.flat_map(move |item1| iter2.clone().map(move |item2| (item1.clone(), item2)))
-    }
-
-    cartesian_product(0..m, 0..n).for_each(|(i, j)| {
+    cartesian_product2(0..m, 0..n).for_each(|(i, j)| {
         let a_vec = (0..k).map(|l| a.data_at(&[i, l]));
         let b_vec = (0..k).map(|l| b.data_at(&[j, l]));
         let prod = a_vec.zip(b_vec).map(|(a, b)| a * b).sum::<f32>();
@@ -146,18 +133,31 @@ pub fn matmul_transb(c: &mut Tensor<f32>, beta: f32, a: &Tensor<f32>, b: &Tensor
     });
 }
 
+pub fn cartesian_product2<I, J>(iter1: I, iter2: J) -> impl Iterator<Item = (I::Item, J::Item)>
+where
+    I: Iterator + Clone,
+    J: Iterator + Clone,
+    I::Item: Clone,
+    J::Item: Clone,
+{
+    iter1.flat_map(move |item1| iter2.clone().map(move |item2| (item1.clone(), item2)))
+}
+
 // Dot product of two tensors (treated as vectors)
 #[allow(unused)]
-pub fn dot(x: &Tensor<f32>, y: &Tensor<f32>) -> f32 {
-    let len = x.size();
-    assert!(len == y.size());
-    let x_ = x.data();
-    let y_ = y.data();
-    let mut sum = 0.0;
-    for i in 0..len {
-        sum += x_[i] * y_[i];
-    }
-    sum
+pub fn dot<T: num_traits::Num + Copy + Clone + Default + std::iter::Sum>(
+    x_vec: &Tensor<T>,
+    y_vec: &Tensor<T>,
+) -> T {
+    debug_assert!(x_vec.size() == y_vec.size());
+    // assert!(x_vec.shape().len() == 1);
+    // assert!(y_vec.shape().len() == 1);
+    x_vec
+        .data()
+        .iter()
+        .zip(y_vec.data())
+        .map(|(&a, &b)| a * b)
+        .sum()
 }
 
 // Sample a index from a tensor (treated as a probability vector)
@@ -196,9 +196,9 @@ pub fn random_sample(x: &Tensor<f32>, top_p: f32, top_k: u32, temperature: f32) 
     }
     impl From<(usize, &f32)> for Probability {
         #[inline]
-        fn from((i, p): (usize, &f32)) -> Self {
+        fn from((i, &p): (usize, &f32)) -> Self {
             Self {
-                val: p.clone(),
+                val: p,
                 tok: i as _,
             }
         }
@@ -265,4 +265,11 @@ fn test_matmul_transb() {
         &Tensor::<f32>::new(vec![15., 34., 35., 81.], &vec![2, 2]),
         1e-3
     ));
+}
+
+#[test]
+fn test_dot_product() {
+    let x = Tensor::<f32>::new(vec![1., 2., 3., 4.], &vec![1, 4]);
+    let y = Tensor::<f32>::new(vec![2., 2., 3., 4.], &vec![1, 4]);
+    assert!(dot(&x, &y) - 31. <= 1e-6);
 }

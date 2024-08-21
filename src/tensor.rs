@@ -1,23 +1,28 @@
-use std::{slice, sync::Arc, vec};
+use getset::Getters;
+use num_traits::Num;
+use std::{slice, sync::Arc};
+
+#[derive(Getters, Clone)]
 pub struct Tensor<T> {
     data: Arc<Box<[T]>>,
+    #[getset(get = "pub")]
     shape: Vec<usize>,
     offset: usize,
     length: usize,
 }
 
-impl<T: Copy + Clone + Default> Tensor<T> {
-    pub fn new(data: Vec<T>, shape: &Vec<usize>) -> Self {
+impl<T: Num + Copy + Clone + Default> Tensor<T> {
+    pub fn new(data: Vec<T>, shape: &[usize]) -> Self {
         let length = data.len();
         Tensor {
-            data: Arc::new(data.into_boxed_slice().try_into().unwrap()),
-            shape: shape.clone(),
+            data: Arc::new(data.into_boxed_slice()),
+            shape: shape.to_vec(),
             offset: 0,
-            length: length,
+            length,
         }
     }
 
-    pub fn default(shape: &Vec<usize>) -> Self {
+    pub fn default(shape: &[usize]) -> Self {
         let length = shape.iter().product();
         let data = vec![T::default(); length];
         Self::new(data, shape)
@@ -31,11 +36,16 @@ impl<T: Copy + Clone + Default> Tensor<T> {
         assert!(self.shape().len() == idx.len());
         assert!(self.shape().iter().zip(idx.iter()).all(|(&s, &i)| i < s));
     }
+
+    pub fn index_to_offset(idx: &[usize], shape: &[usize]) -> usize {
+        idx.iter()
+            .zip(shape)
+            .fold(0, |acc, (&i, &dim)| acc * dim + i)
+    }
+
     pub fn to_offset(&self, idx: &[usize]) -> usize {
         self.check_idx(idx);
-        idx.iter()
-            .zip(self.shape())
-            .fold(0, |acc, (&i, &dim)| acc * dim + i)
+        Self::index_to_offset(idx, &self.shape)
     }
     pub fn data_at(&self, idx: &[usize]) -> T {
         self.data()[self.to_offset(idx)]
@@ -56,46 +66,30 @@ impl<T: Copy + Clone + Default> Tensor<T> {
         prev_val
     }
 
-    pub fn shape(&self) -> &Vec<usize> {
-        &self.shape
-    }
-
     pub fn size(&self) -> usize {
         self.length
     }
 
     // Reinterpret the tensor as a new shape while preserving total size.
-    pub fn reshape(&mut self, new_shape: &Vec<usize>) -> &mut Self {
+    pub fn reshape(&mut self, new_shape: &[usize]) -> &mut Self {
         let new_length: usize = new_shape.iter().product();
         if new_length != self.length {
             let old_shape = self.shape.clone();
             panic!("New shape {new_shape:?} does not match tensor of {old_shape:?}");
         }
-        self.shape = new_shape.clone();
+        self.shape = new_shape.to_owned();
         self
     }
 
-    pub fn slice(&self, start: usize, shape: &Vec<usize>) -> Self {
-        let new_length: usize = shape.iter().product();
-        assert!(self.offset + start + new_length <= self.length);
+    pub fn slice(&self, start: usize, shape: &[usize]) -> Self {
+        let length: usize = shape.iter().product();
+        assert!(length <= self.length && start <= self.length - length);
         Tensor {
             data: self.data.clone(),
-            shape: shape.clone(),
+            shape: shape.to_owned(),
             offset: self.offset + start,
-            length: new_length,
+            length,
         }
-    }
-
-    pub fn copy_from_tensor(&mut self, other: &Self) {
-        assert!(self.shape() == other.shape());
-        let data = unsafe { self.data_mut() };
-        data.copy_from_slice(other.data());
-    }
-
-    pub fn deep_copy(&self) -> Self {
-        let mut copy = Self::default(self.shape());
-        copy.copy_from_tensor(self);
-        copy
     }
 }
 
@@ -114,7 +108,7 @@ impl Tensor<f32> {
     #[allow(unused)]
     pub fn print(&self) {
         println!(
-            "shpae: {:?}, offset: {}, length: {}",
+            "shape: {:?}, offset: {}, length: {}",
             self.shape, self.offset, self.length
         );
         let dim = self.shape()[self.shape().len() - 1];
@@ -139,7 +133,7 @@ pub fn float_eq(x: &f32, y: &f32, rel: f32) -> bool {
     (x - y).abs() <= rel * (x.abs() + y.abs()) / 2.0
 }
 
-// #[test]
+#[test]
 fn test_data_at_idx() {
     let t = Tensor::<f32>::new(vec![1., 2., 3., 4., 5., 6.], &vec![2, 3]);
     // [[1., 2., 3.],
@@ -150,7 +144,7 @@ fn test_data_at_idx() {
     assert!(t.data_at(&[1, 0]) == 4.);
 }
 
-// #[test]
+#[test]
 fn test_mutate_dat_at_idx() {
     let mut t = Tensor::<f32>::new(vec![1., 2., 3., 4., 5., 6.], &vec![2, 3]);
     // [[1., 2., 3.],

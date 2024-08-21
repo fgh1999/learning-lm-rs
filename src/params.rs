@@ -1,5 +1,4 @@
-use crate::config::LlamaConfigJson;
-use crate::tensor::Tensor;
+use crate::{config::LlamaConfigJson, tensor::Tensor};
 use safetensors::SafeTensors;
 pub struct LLamaParams<T> {
     // token_id to embedding lookup table
@@ -31,7 +30,7 @@ impl LLamaParams<f32> {
                         .data()
                         .chunks_exact(core::mem::size_of::<f32>())
                         .map(|bytes| f32::from_le_bytes(bytes.try_into().unwrap()));
-                    Tensor::new(data_from_bytes.collect(), &tensor_view.shape().to_vec())
+                    Tensor::new(data_from_bytes.collect(), tensor_view.shape())
                 }
                 _ => unimplemented!(),
             }
