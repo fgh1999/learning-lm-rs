@@ -1,5 +1,3 @@
-use std::fs::File;
-
 use crate::{
     config::LlamaConfigJson,
     kvcache::KVCache,
@@ -7,9 +5,11 @@ use crate::{
     params::LLamaParams,
     tensor::Tensor,
 };
+use getset::Getters;
 use safetensors::SafeTensors;
-use std::path::Path;
+use std::{fs::File, path::Path};
 
+#[derive(Getters)]
 pub struct Llama<T> {
     vocab: usize,           // vocab size
     n_layers: usize,        // number of layers
@@ -24,6 +24,17 @@ pub struct Llama<T> {
     params: LLamaParams<T>, // trained weights of this model
     bos_token_id: u32,      // start token id
     eos_token_id: u32,      // end token id
+    #[cfg(feature = "perf")]
+    #[getset(get = "pub")]
+    perf_info: std::sync::Mutex<PerfInfo>,
+}
+
+#[derive(Getters, Default, Debug)]
+pub struct PerfInfo {
+    #[getset(get = "pub")]
+    total_generation_duration: Option<std::time::Duration>,
+    #[getset(get = "pub")]
+    prompt_duration: Option<std::time::Duration>,
 }
 
 impl Llama<f32> {
@@ -49,6 +60,8 @@ impl Llama<f32> {
             params,
             bos_token_id: config.bos_token_id,
             eos_token_id: config.eos_token_id,
+            #[cfg(feature = "perf")]
+            perf_info: std::sync::Mutex::new(PerfInfo::default()),
         }
     }
 
@@ -77,6 +90,7 @@ impl Llama<f32> {
         OP::gather(&mut residual, input, &self.params.embedding_table);
 
         for layer in 0..self.n_layers {
+            // Multi-head self-attention
             {
                 OP::rms_norm(
                     &mut hidden_states,
@@ -178,6 +192,10 @@ impl Llama<f32> {
                 OP::random_sample(&logits, top_p, top_k, temperature)
             }};
         }
+
+        #[cfg(feature = "perf")]
+        let start = std::time::Instant::now();
+
         result.push({
             let prompt_token_ids = if !token_ids.is_empty() {
                 token_ids.to_vec()
@@ -186,9 +204,21 @@ impl Llama<f32> {
             };
             generate_next!(prompt_token_ids)
         });
+
+        #[cfg(feature = "perf")]
+        let first_iter_duration = start.elapsed();
+
         while result.len() < max_len && result.last() != Some(&self.eos_token_id) {
             result.push(generate_next!(vec![*result.last().unwrap()]));
         }
+
+        #[cfg(feature = "perf")]
+        {
+            let mut perf_info = self.perf_info.lock().unwrap();
+            perf_info.total_generation_duration = Some(start.elapsed());
+            perf_info.prompt_duration = Some(first_iter_duration);
+        }
+
         result
     }
 }

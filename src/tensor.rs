@@ -33,14 +33,24 @@ impl<T: Num + Copy + Clone + Default> Tensor<T> {
     }
 
     fn check_idx(&self, idx: &[usize]) {
-        assert!(self.shape().len() == idx.len());
-        assert!(self.shape().iter().zip(idx.iter()).all(|(&s, &i)| i < s));
+        debug_assert!(self.shape().len() == idx.len());
+        debug_assert!(self.shape().iter().zip(idx.iter()).all(|(&s, &i)| i < s));
     }
 
     pub fn index_to_offset(idx: &[usize], shape: &[usize]) -> usize {
         idx.iter()
             .zip(shape)
             .fold(0, |acc, (&i, &dim)| acc * dim + i)
+    }
+    pub fn offset_to_index(offset: usize, shape: &[usize]) -> Vec<usize> {
+        let mut idx = Vec::with_capacity(shape.len());
+        let mut offset = offset;
+        for &dim in shape.iter().rev() {
+            idx.push(offset % dim);
+            offset /= dim;
+        }
+        idx.reverse();
+        idx
     }
 
     pub fn to_offset(&self, idx: &[usize]) -> usize {

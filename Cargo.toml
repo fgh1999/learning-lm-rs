@@ -11,3 +11,9 @@ tokenizers = "0.19.1"
 rand = "0.8"
 getset = "0.1.2"
 num-traits = "0.2.19"
+rayon = { version = "1.10.0", optional = true }
+
+[features]
+default = ["perf"]
+rayon = ["dep:rayon"]
+perf = []

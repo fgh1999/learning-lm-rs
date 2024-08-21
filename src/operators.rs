@@ -71,9 +71,9 @@ pub fn masked_softmax(y: &mut Tensor<f32>) {
 }
 
 pub fn rms_norm(y: &mut Tensor<f32>, x: &Tensor<f32>, w: &Tensor<f32>, epsilon: f32) {
-    assert!(y.shape() == x.shape());
-    assert!(x.shape().len() == w.shape().len() + 1 || w.size() == 1 && x.shape().len() == 1);
-    assert!(w
+    debug_assert!(y.shape() == x.shape());
+    debug_assert!(x.shape().len() == w.shape().len() + 1 || w.size() == 1 && x.shape().len() == 1);
+    debug_assert!(w
         .shape()
         .iter()
         .zip(x.shape().iter().rev())
@@ -96,7 +96,7 @@ pub fn rms_norm(y: &mut Tensor<f32>, x: &Tensor<f32>, w: &Tensor<f32>, epsilon: 
 // y = sigmoid(x) * x * y
 // hint: this is an element-wise operation
 pub fn silu(y: &mut Tensor<f32>, x: &Tensor<f32>) {
-    assert!(y.size() == x.size());
+    debug_assert!(y.size() == x.size());
 
     let y_data = unsafe { y.data_mut() };
     let x_data = x.data();
@@ -111,26 +111,54 @@ pub fn silu(y: &mut Tensor<f32>, x: &Tensor<f32>) {
 
 // C = beta * C + alpha * A @ B^T
 // Assume that A is of shape (m, k), B is of shape (n, k), C is of shape (m, n).
-// hint: You don't need to do an explicit transpose of B
 pub fn matmul_transb(c: &mut Tensor<f32>, beta: f32, a: &Tensor<f32>, b: &Tensor<f32>, alpha: f32) {
-    assert!(c.shape().len() == 2);
-    assert!(a.shape().len() == 2);
-    assert!(b.shape().len() == 2);
-    assert!(a.shape()[1] == b.shape()[1]);
-    assert!(c.shape()[0] == a.shape()[0]);
-    assert!(c.shape()[1] == b.shape()[0]);
-    let m: usize = a.shape()[0];
-    let n = b.shape()[0];
-    let k = a.shape()[1];
-
-    cartesian_product2(0..m, 0..n).for_each(|(i, j)| {
-        let a_vec = (0..k).map(|l| a.data_at(&[i, l]));
-        let b_vec = (0..k).map(|l| b.data_at(&[j, l]));
-        let prod = a_vec.zip(b_vec).map(|(a, b)| a * b).sum::<f32>();
+    debug_assert!(c.shape().len() == 2);
+    debug_assert!(a.shape().len() == 2);
+    debug_assert!(b.shape().len() == 2);
+    debug_assert!(a.shape()[1] == b.shape()[1]);
+    debug_assert!(c.shape()[0] == a.shape()[0]);
+    debug_assert!(c.shape()[1] == b.shape()[0]);
+    let vec_shape = [a.shape()[1]];
+    #[cfg(not(feature = "rayon"))]
+    cartesian_product2(0..c.shape()[0], 0..c.shape()[1]).for_each(|(i, j)| {
+        let a_vec = a.slice(
+            Tensor::<f32>::index_to_offset(&[i, 0], a.shape()),
+            &vec_shape,
+        );
+        let b_vec = b.slice(
+            Tensor::<f32>::index_to_offset(&[j, 0], b.shape()),
+            &vec_shape,
+        );
+        let prod = dot(&a_vec, &b_vec);
         unsafe {
             c.with_data_mut_at(&[i, j], |&prev| alpha * prod + beta * prev);
         }
     });
+
+    #[cfg(feature = "rayon")]
+    {
+        let c_shape = c.shape().clone();
+        let c_data = unsafe { c.data_mut() };
+        use rayon::prelude::*;
+        c_data
+            .par_iter_mut()
+            .enumerate()
+            .for_each(|(offset, c_val)| {
+                let idx = Tensor::<f32>::offset_to_index(offset, &c_shape);
+                let i = idx[0];
+                let j = idx[1];
+                let a_vec = a.slice(
+                    Tensor::<f32>::index_to_offset(&[i, 0], a.shape()),
+                    &vec_shape,
+                );
+                let b_vec = b.slice(
+                    Tensor::<f32>::index_to_offset(&[j, 0], b.shape()),
+                    &vec_shape,
+                );
+                let prod = dot(&a_vec, &b_vec);
+                *c_val = alpha * prod + beta * *c_val;
+            });
+    }
 }
 
 pub fn cartesian_product2<I, J>(iter1: I, iter2: J) -> impl Iterator<Item = (I::Item, J::Item)>
@@ -144,18 +172,26 @@ where
 }
 
 // Dot product of two tensors (treated as vectors)
-#[allow(unused)]
-pub fn dot<T: num_traits::Num + Copy + Clone + Default + std::iter::Sum>(
-    x_vec: &Tensor<T>,
-    y_vec: &Tensor<T>,
+#[cfg(not(feature = "rayon"))]
+pub fn dot<'a, T: num_traits::Num + Copy + Clone + Default + std::iter::Sum>(
+    x_vec: &'a Tensor<T>,
+    y_vec: &'a Tensor<T>,
 ) -> T {
     debug_assert!(x_vec.size() == y_vec.size());
-    // assert!(x_vec.shape().len() == 1);
-    // assert!(y_vec.shape().len() == 1);
     x_vec
         .data()
         .iter()
         .zip(y_vec.data())
+        .map(|(&a, &b)| a * b)
+        .sum()
+}
+
+#[cfg(feature = "rayon")]
+pub fn dot(x_vec: &Tensor<f32>, y_vec: &Tensor<f32>) -> f32 {
+    debug_assert!(x_vec.size() == y_vec.size());
+    use rayon::prelude::*;
+    (x_vec.data(), y_vec.data())
+        .into_par_iter()
         .map(|(&a, &b)| a * b)
         .sum()
 }
@@ -271,5 +307,5 @@ fn test_matmul_transb() {
 fn test_dot_product() {
     let x = Tensor::<f32>::new(vec![1., 2., 3., 4.], &vec![1, 4]);
     let y = Tensor::<f32>::new(vec![2., 2., 3., 4.], &vec![1, 4]);
-    assert!(dot(&x, &y) - 31. <= 1e-6);
+    assert!((dot(&x, &y) - 31.).abs() <= 1e-6);
 }
