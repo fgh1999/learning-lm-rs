@@ -4,7 +4,7 @@ use num_traits::Num;
 use crate::tensor::Tensor;
 
 #[derive(Getters, MutGetters)]
-pub struct KVCache<T> {
+pub struct KVCache<T: Num + Default + Copy> {
     k_cache: Vec<Tensor<T>>, // (max_seq_len, n_kv_head * dqkv) x layers
     v_cache: Vec<Tensor<T>>, // (max_seq_len, n_kv_head * dqkv) x layers
     #[allow(unused)]

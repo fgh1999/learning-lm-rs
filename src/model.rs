@@ -6,11 +6,17 @@ use crate::{
     tensor::Tensor,
 };
 use getset::Getters;
+use num_traits::{float::TotalOrder, Float, Num};
 use safetensors::SafeTensors;
-use std::{fs::File, path::Path};
+use std::{
+    fs::File,
+    ops::{AddAssign, DivAssign, MulAssign},
+    path::Path,
+    sync::Mutex,
+};
 
 #[derive(Getters)]
-pub struct Llama<T> {
+pub struct Llama<T: Num> {
     vocab: usize,           // vocab size
     n_layers: usize,        // number of layers
     n_q_h: usize,           // number of heads for q
@@ -24,9 +30,8 @@ pub struct Llama<T> {
     params: LLamaParams<T>, // trained weights of this model
     bos_token_id: u32,      // start token id
     eos_token_id: u32,      // end token id
-    #[cfg(feature = "perf")]
     #[getset(get = "pub")]
-    perf_info: std::sync::Mutex<PerfInfo>,
+    perf_info: Mutex<PerfInfo>,
 }
 
 #[derive(Getters, Default, Debug)]
@@ -37,39 +42,14 @@ pub struct PerfInfo {
     prompt_duration: Option<std::time::Duration>,
 }
 
-impl Llama<f32> {
-    pub fn from_safetensors(model_dir: impl AsRef<Path>) -> Self {
-        let config = File::open(model_dir.as_ref().join("config.json")).unwrap();
-        let config: LlamaConfigJson = serde_json::from_reader(config).unwrap();
-        let model_file = std::fs::read(model_dir.as_ref().join("model.safetensors")).unwrap();
-        let safetensor = SafeTensors::deserialize(&model_file).unwrap();
-        let params = LLamaParams::from_safetensors(&safetensor, &config);
-
-        assert!(config.num_attention_heads % config.num_key_value_heads == 0);
-        Self {
-            vocab: config.vocab_size,
-            n_layers: config.num_hidden_layers,
-            n_q_h: config.num_attention_heads,
-            n_kv_h: config.num_key_value_heads,
-            d: config.hidden_size,
-            dqkv: config.hidden_size / config.num_attention_heads,
-            di: config.intermediate_size,
-            eps: config.rms_norm_eps,
-            rope_theta: config.rope_theta,
-            max_seq_len: config.max_position_embeddings,
-            params,
-            bos_token_id: config.bos_token_id,
-            eos_token_id: config.eos_token_id,
-            #[cfg(feature = "perf")]
-            perf_info: std::sync::Mutex::new(PerfInfo::default()),
-        }
-    }
-
-    pub fn new_kvcache(&self) -> KVCache<f32> {
+impl<T: Num + Default + Copy + Clone> Llama<T> {
+    pub fn new_kvcache(&self) -> KVCache<T> {
         KVCache::new(self.n_layers, self.max_seq_len, self.n_kv_h * self.dqkv, 0)
     }
+}
 
-    pub fn forward(&self, input: &Tensor<u32>, cache: &mut KVCache<f32>) -> Tensor<f32> {
+impl<T: Float + std::iter::Sum + Sync + Send + MulAssign + DivAssign + AddAssign + Copy + Clone + Default + TotalOrder> Llama<T> {
+    pub fn forward(&self, input: &Tensor<u32>, cache: &mut KVCache<T>) -> Tensor<T> {
         let seq_len = input.size();
         let past_seq_len = *cache.seq_len();
         *cache.seq_len_mut() += seq_len;
@@ -77,13 +57,13 @@ impl Llama<f32> {
         let n_groups = self.n_q_h / self.n_kv_h;
 
         // Some pre-allocated buffers that will be reused
-        let mut residual = Tensor::<f32>::default(&[seq_len, self.d]);
-        let mut hidden_states = Tensor::<f32>::default(&[seq_len, self.d]);
-        let mut q_buf = Tensor::<f32>::default(&[seq_len, self.n_q_h * self.dqkv]);
+        let mut residual = Tensor::<T>::default(&[seq_len, self.d]);
+        let mut hidden_states = Tensor::<T>::default(&[seq_len, self.d]);
+        let mut q_buf = Tensor::<T>::default(&[seq_len, self.n_q_h * self.dqkv]);
         let mut att_scores =
-            Tensor::<f32>::default(&[self.n_kv_h, n_groups, seq_len, total_seq_len]);
-        let mut gate_buf = Tensor::<f32>::default(&[seq_len, self.di]);
-        let mut up_buf = Tensor::<f32>::default(&[seq_len, self.di]);
+            Tensor::<T>::default(&[self.n_kv_h, n_groups, seq_len, total_seq_len]);
+        let mut gate_buf = Tensor::<T>::default(&[seq_len, self.di]);
+        let mut up_buf = Tensor::<T>::default(&[seq_len, self.di]);
 
         // Computation Starts Here
         // Embedding lookup
@@ -164,7 +144,7 @@ impl Llama<f32> {
 
         // No matter what seq_len, the output is always a 1D vector of length vocab,
         // which contains the probabilities for the next token.
-        let mut logits = Tensor::<f32>::default(&[1, self.vocab]);
+        let mut logits = Tensor::<T>::default(&[1, self.vocab]);
         OP::matmul_transb(&mut logits, 0., &hidden_states, &self.params.lm_head, 1.0);
 
         logits
@@ -223,12 +203,42 @@ impl Llama<f32> {
     }
 }
 
-fn self_attention(
-    hidden_states: &mut Tensor<f32>, // (seq, n_kv_h * n_groups * dqkv)
-    att_scores: &mut Tensor<f32>,    // (n_kv_h, n_groups, seq, total_seq)
-    q: &Tensor<f32>,                 // (seq, n_kv_h * n_groups, dqkv)
-    k: &Tensor<f32>,                 // (total_seq, n_kv_h * dqkv)
-    v: &Tensor<f32>,                 // (total_seq, n_kv_h * dqkv)
+impl Llama<f32> {
+    pub fn from_safetensors(model_dir: impl AsRef<Path>) -> Self {
+        let config = File::open(model_dir.as_ref().join("config.json")).unwrap();
+        let config: LlamaConfigJson = serde_json::from_reader(config).unwrap();
+        let model_file = std::fs::read(model_dir.as_ref().join("model.safetensors")).unwrap();
+        let safetensor = SafeTensors::deserialize(&model_file).unwrap();
+        let params = LLamaParams::from_safetensors(&safetensor, &config);
+
+        assert!(config.num_attention_heads % config.num_key_value_heads == 0);
+        Self {
+            vocab: config.vocab_size,
+            n_layers: config.num_hidden_layers,
+            n_q_h: config.num_attention_heads,
+            n_kv_h: config.num_key_value_heads,
+            d: config.hidden_size,
+            dqkv: config.hidden_size / config.num_attention_heads,
+            di: config.intermediate_size,
+            eps: config.rms_norm_eps,
+            rope_theta: config.rope_theta,
+            max_seq_len: config.max_position_embeddings,
+            params,
+            bos_token_id: config.bos_token_id,
+            eos_token_id: config.eos_token_id,
+            perf_info: Mutex::new(PerfInfo::default()),
+        }
+    }
+}
+
+fn self_attention<
+    P: Float + std::iter::Sum + Sync + Send + MulAssign + DivAssign + AddAssign,
+>(
+    hidden_states: &mut Tensor<P>, // (seq, n_kv_h * n_groups * dqkv)
+    att_scores: &mut Tensor<P>,    // (n_kv_h, n_groups, seq, total_seq)
+    q: &Tensor<P>,                 // (seq, n_kv_h * n_groups, dqkv)
+    k: &Tensor<P>,                 // (total_seq, n_kv_h * dqkv)
+    v: &Tensor<P>,                 // (total_seq, n_kv_h * dqkv)
     n_kv_h: usize,
     n_groups: usize,
     seq_len: usize,
@@ -243,33 +253,32 @@ fn self_attention(
     let q = q.slice(0, &[seq_len, n_kv_h, n_groups, dqkv]);
     assert!(k.shape()[1] == n_kv_h * dqkv);
     let k = k.slice(0, &[total_seq_len, n_kv_h, dqkv]);
+    let dqkv_root = P::from(dqkv).unwrap().sqrt();
 
     cartesian_product2(0..n_kv_h, 0..n_groups).for_each(|(kv_idx, g_idx)| {
         let mut att_result = {
-            let start = Tensor::<f32>::index_to_offset(&[kv_idx, g_idx, 0, 0], att_scores.shape());
+            let start = Tensor::<P>::index_to_offset(&[kv_idx, g_idx, 0, 0], att_scores.shape());
             let shape = [seq_len, total_seq_len];
             att_scores.slice(start, &shape)
         };
-        cartesian_product2(0..seq_len, 0..total_seq_len).for_each(|(seq_idx, tseq_idx)| {
+        cartesian_product2(0..seq_len, 0..total_seq_len)
             // skip masked calculation
-            if (total_seq_len - seq_len) + seq_idx < tseq_idx {
-                return;
-            }
-            let vec_shape = [dqkv];
-            let q_vec = q.slice(
-                Tensor::<f32>::index_to_offset(&[seq_idx, kv_idx, g_idx, 0], q.shape()),
-                &vec_shape,
-            );
-            let k_vec = k.slice(
-                Tensor::<f32>::index_to_offset(&[tseq_idx, kv_idx, 0], k.shape()),
-                &vec_shape,
-            );
-            unsafe {
-                att_result.with_data_mut_at(&[seq_idx, tseq_idx], |_| {
-                    OP::dot(&q_vec, &k_vec) / (dqkv as f32).sqrt()
-                });
-            }
-        });
+            .filter(|&(seq_idx, tseq_idx)| (total_seq_len - seq_len) + seq_idx >= tseq_idx)
+            .for_each(|(seq_idx, tseq_idx)| {
+                let q_vec = q.slice(
+                    Tensor::<P>::index_to_offset(&[seq_idx, kv_idx, g_idx, 0], q.shape()),
+                    &[dqkv],
+                );
+                let k_vec = k.slice(
+                    Tensor::<P>::index_to_offset(&[tseq_idx, kv_idx, 0], k.shape()),
+                    &[dqkv],
+                );
+                unsafe {
+                    att_result.with_data_mut_at(&[seq_idx, tseq_idx], |_| {
+                        OP::dot(&q_vec, &k_vec) / dqkv_root
+                    });
+                }
+            });
     });
     OP::masked_softmax(att_scores);
 
@@ -278,12 +287,12 @@ fn self_attention(
     cartesian_product2(0..n_groups, 0..seq_len).for_each(|(g_idx, seq_idx)| {
         cartesian_product2(0..n_kv_h, 0..total_seq_len).for_each(|(kv_idx, tseq_idx)| {
             let v_vec = v.slice(
-                Tensor::<f32>::index_to_offset(&[tseq_idx, kv_idx, 0], v.shape()),
+                Tensor::<P>::index_to_offset(&[tseq_idx, kv_idx, 0], v.shape()),
                 &[dqkv],
             );
             let att_score = att_scores.data_at(&[kv_idx, g_idx, seq_idx, tseq_idx]);
             let mut hidden_vec = hidden.slice(
-                Tensor::<f32>::index_to_offset(&[seq_idx, kv_idx, g_idx, 0], hidden.shape()),
+                Tensor::<P>::index_to_offset(&[seq_idx, kv_idx, g_idx, 0], hidden.shape()),
                 &[dqkv],
             );
             let hv = unsafe { hidden_vec.data_mut() };
@@ -294,23 +303,22 @@ fn self_attention(
     });
 }
 
-fn mlp(
-    residual: &mut Tensor<f32>,
-    hidden_states: &mut Tensor<f32>,
-    gate: &mut Tensor<f32>,
-    up: &mut Tensor<f32>,
-    w_up: &Tensor<f32>,
-    w_down: &Tensor<f32>,
-    w_gate: &Tensor<f32>,
-    rms_w: &Tensor<f32>,
-    eps: f32,
+fn mlp<P: Float + std::iter::Sum + Sync + Send + MulAssign>(
+    residual: &mut Tensor<P>,
+    hidden_states: &mut Tensor<P>,
+    gate: &mut Tensor<P>,
+    up: &mut Tensor<P>,
+    w_up: &Tensor<P>,
+    w_down: &Tensor<P>,
+    w_gate: &Tensor<P>,
+    rms_w: &Tensor<P>,
+    eps: impl Float,
 ) {
     OP::rms_norm(hidden_states, residual, rms_w, eps);
     OP::matmul_transb(gate, 0., hidden_states, w_gate, 1.);
     OP::matmul_transb(up, 0., hidden_states, w_up, 1.);
     OP::silu(up, gate);
-    OP::matmul_transb(hidden_states, 0., up, w_down, 1.);
-    residual.plus_(hidden_states);
+    OP::matmul_transb(residual, 1., up, w_down, 1.);
 }
 
 #[test]
@@ -347,7 +355,7 @@ pub fn test_mlp() {
             ],
             &vec![seq_len, d]
         ),
-        1e-3
+        1e-6
     ))
 }
 

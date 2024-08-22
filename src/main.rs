@@ -23,11 +23,12 @@ fn main() {
     #[cfg(feature = "perf")]
     {
         if output_ids.len() > 1 {
+            println!("--- Performance ---");
             let perf_info = llama.perf_info().lock().unwrap();
             let token_per_sec =
                 input_ids.len() as f64 / perf_info.prompt_duration().unwrap().as_secs_f64();
             println!(
-                "Prompt Processing Performance(prompt token len: {}): {:.6} tokens/s",
+                "Prompt Processing(prompt token len: {}): {:.6} tokens/s",
                 input_ids.len(),
                 token_per_sec
             );
@@ -38,10 +39,7 @@ fn main() {
                         - perf_info.prompt_duration().unwrap())
                     .as_secs_f64()
                 };
-            println!(
-                "Story Generation Performance: {:.6} tokens/s",
-                token_per_sec
-            );
+            println!("Story Generation: {:.6} tokens/s", token_per_sec);
         } else {
             println!("Output is too short to measure performance.");
         }

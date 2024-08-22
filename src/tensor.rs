@@ -3,7 +3,7 @@ use num_traits::Num;
 use std::{slice, sync::Arc};
 
 #[derive(Getters, Clone)]
-pub struct Tensor<T> {
+pub struct Tensor<T: Num> {
     data: Arc<Box<[T]>>,
     #[getset(get = "pub")]
     shape: Vec<usize>,
@@ -12,6 +12,20 @@ pub struct Tensor<T> {
 }
 
 impl<T: Num + Copy + Clone + Default> Tensor<T> {
+    pub fn default(shape: &[usize]) -> Self {
+        let length = shape.iter().product();
+        let data = vec![T::default(); length];
+        Self::new(data, shape)
+    }
+}
+
+impl<T: Num + Copy + Clone> Tensor<T> {
+    pub fn data_at(&self, idx: &[usize]) -> T {
+        self.data()[self.to_offset(idx)]
+    }
+}
+
+impl<T: Num> Tensor<T> {
     pub fn new(data: Vec<T>, shape: &[usize]) -> Self {
         let length = data.len();
         Tensor {
@@ -20,12 +34,6 @@ impl<T: Num + Copy + Clone + Default> Tensor<T> {
             offset: 0,
             length,
         }
-    }
-
-    pub fn default(shape: &[usize]) -> Self {
-        let length = shape.iter().product();
-        let data = vec![T::default(); length];
-        Self::new(data, shape)
     }
 
     pub fn data(&self) -> &[T] {
@@ -56,9 +64,6 @@ impl<T: Num + Copy + Clone + Default> Tensor<T> {
     pub fn to_offset(&self, idx: &[usize]) -> usize {
         self.check_idx(idx);
         Self::index_to_offset(idx, &self.shape)
-    }
-    pub fn data_at(&self, idx: &[usize]) -> T {
-        self.data()[self.to_offset(idx)]
     }
 
     pub unsafe fn data_mut(&mut self) -> &mut [T] {
@@ -127,14 +132,6 @@ impl Tensor<f32> {
             let start = i * dim;
             println!("{:?}", &self.data()[start..][..dim]);
         }
-    }
-
-    pub fn plus_(&mut self, other: &Self) {
-        assert!(self.shape() == other.shape());
-        let data = unsafe { self.data_mut() };
-        data.iter_mut()
-            .zip(other.data())
-            .for_each(|(x, &y)| *x += y);
     }
 }
 
