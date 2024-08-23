@@ -1,6 +1,6 @@
 use getset::Getters;
-use num_traits::Num;
-use std::{slice, sync::Arc};
+use num_traits::{Float, Num};
+use std::{fmt::Debug, slice, sync::Arc};
 
 #[derive(Getters, Clone)]
 pub struct Tensor<T: Num> {
@@ -108,18 +108,20 @@ impl<T: Num> Tensor<T> {
     }
 }
 
-// Some helper functions for testing and debugging
-impl Tensor<f32> {
-    #[allow(unused)]
-    pub fn close_to(&self, other: &Self, rel: f32) -> bool {
+impl<T: Float> Tensor<T> {
+    pub fn close_to(&self, other: &Self, rel: impl Float) -> bool {
         if self.shape() != other.shape() {
             return false;
         }
-        let a = self.data();
-        let b = other.data();
-
-        return a.iter().zip(b).all(|(x, y)| float_eq(x, y, rel));
+        self.data()
+            .iter()
+            .zip(other.data())
+            .all(|(x, y)| float_eq(x, y, rel))
     }
+}
+
+// Some helper functions for testing and debugging
+impl<T: Num + Debug> Tensor<T> {
     #[allow(unused)]
     pub fn print(&self) {
         println!(
@@ -135,9 +137,9 @@ impl Tensor<f32> {
     }
 }
 
-#[inline]
-pub fn float_eq(x: &f32, y: &f32, rel: f32) -> bool {
-    (x - y).abs() <= rel * (x.abs() + y.abs()) / 2.0
+pub fn float_eq<T: Float>(x: &T, y: &T, rel: impl Float) -> bool {
+    let rel = T::from(rel).unwrap();
+    x.sub(*y).abs() <= rel * (x.abs() + y.abs()) / T::from(2).unwrap()
 }
 
 #[test]

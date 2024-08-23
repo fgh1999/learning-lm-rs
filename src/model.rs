@@ -48,7 +48,20 @@ impl<T: Num + Default + Copy + Clone> Llama<T> {
     }
 }
 
-impl<T: Float + std::iter::Sum + Sync + Send + MulAssign + DivAssign + AddAssign + Copy + Clone + Default + TotalOrder> Llama<T> {
+impl<
+        T: Float
+            + std::iter::Sum
+            + Sync
+            + Send
+            + MulAssign
+            + DivAssign
+            + AddAssign
+            + Copy
+            + Clone
+            + Default
+            + TotalOrder,
+    > Llama<T>
+{
     pub fn forward(&self, input: &Tensor<u32>, cache: &mut KVCache<T>) -> Tensor<T> {
         let seq_len = input.size();
         let past_seq_len = *cache.seq_len();
@@ -60,8 +73,7 @@ impl<T: Float + std::iter::Sum + Sync + Send + MulAssign + DivAssign + AddAssign
         let mut residual = Tensor::<T>::default(&[seq_len, self.d]);
         let mut hidden_states = Tensor::<T>::default(&[seq_len, self.d]);
         let mut q_buf = Tensor::<T>::default(&[seq_len, self.n_q_h * self.dqkv]);
-        let mut att_scores =
-            Tensor::<T>::default(&[self.n_kv_h, n_groups, seq_len, total_seq_len]);
+        let mut att_scores = Tensor::<T>::default(&[self.n_kv_h, n_groups, seq_len, total_seq_len]);
         let mut gate_buf = Tensor::<T>::default(&[seq_len, self.di]);
         let mut up_buf = Tensor::<T>::default(&[seq_len, self.di]);
 
@@ -231,9 +243,7 @@ impl Llama<f32> {
     }
 }
 
-fn self_attention<
-    P: Float + std::iter::Sum + Sync + Send + MulAssign + DivAssign + AddAssign,
->(
+fn self_attention<P: Float + std::iter::Sum + Sync + Send + MulAssign + DivAssign + AddAssign>(
     hidden_states: &mut Tensor<P>, // (seq, n_kv_h * n_groups * dqkv)
     att_scores: &mut Tensor<P>,    // (n_kv_h, n_groups, seq, total_seq)
     q: &Tensor<P>,                 // (seq, n_kv_h * n_groups, dqkv)

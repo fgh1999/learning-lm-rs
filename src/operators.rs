@@ -302,55 +302,160 @@ pub fn random_sample<P: Float + Copy + Clone + TotalOrder>(
     logits.iter().find(|p| p.val >= plimit).unwrap().tok
 }
 
-// Your implementation should at least pass the following tests:
 #[test]
 fn test_silu() {
-    let mut y = Tensor::<f32>::new(vec![2., 3., 4.], &vec![1, 3]);
-    let x = Tensor::<f32>::new(vec![1., 2., 3.], &vec![1, 3]);
-    silu(&mut y, &x);
-    assert!(y.close_to(
-        &Tensor::<f32>::new(vec![1.4621172, 5.2847824, 11.43089], &vec![1, 3]),
-        f32::EPSILON
-    ));
+    macro_rules! test_silu_for_float_type {
+        ($type_:ty, $tolerance:expr, $type_converter:expr) => {{
+            let x_src = vec![1., 2., 3.];
+            let y_src = vec![2., 3., 4.];
+
+            let mut y = Tensor::<$type_>::new(
+                y_src.into_iter().map($type_converter).collect(),
+                &vec![1, 3],
+            );
+            let x = Tensor::<$type_>::new(
+                x_src.into_iter().map($type_converter).collect(),
+                &vec![1, 3],
+            );
+            silu(&mut y, &x);
+            assert!(y.close_to(
+                &Tensor::<$type_>::new(
+                    vec![1.4621172, 5.2847824, 11.43089]
+                        .into_iter()
+                        .map($type_converter)
+                        .collect(),
+                    &vec![1, 3]
+                ),
+                $tolerance
+            ));
+        }};
+    }
+    test_silu_for_float_type!(f32, 1e-6, f32::from);
+    test_silu_for_float_type!(f64, 1e-6, f64::from);
+    use half::{bf16, f16};
+    test_silu_for_float_type!(f16, f16::EPSILON, f16::from_f32);
+    test_silu_for_float_type!(bf16, bf16::EPSILON, bf16::from_f32);
 }
 
 #[test]
 fn test_rms_norm() {
-    let mut y = Tensor::<f32>::new(vec![1., 2., 3., 4.], &vec![2, 2]);
-    let x = Tensor::<f32>::new(vec![1., 2., 3., 4.], &vec![2, 2]);
-    let w = Tensor::<f32>::new(vec![1., 2.], &vec![2]);
-    rms_norm(&mut y, &x, &w, 1e-6);
-    assert!(y.close_to(
-        &Tensor::<f32>::new(
-            vec![0.6324554, 2.5298216, 0.8485281, 2.2627416],
-            &vec![2, 2]
-        ),
-        f32::EPSILON
-    ));
+    macro_rules! test_rms_norm_for_float {
+        ($type_:ty, $tolerance:expr, $type_converter:expr) => {{
+            let y_src = vec![1., 2., 3., 4.];
+            let x_src = vec![1., 2., 3., 4.];
+            let w_src = vec![1., 2.];
+
+            let mut y = Tensor::<$type_>::new(
+                y_src.into_iter().map($type_converter).collect(),
+                &vec![2, 2],
+            );
+            let x = Tensor::<$type_>::new(
+                x_src.into_iter().map($type_converter).collect(),
+                &vec![2, 2],
+            );
+            let w =
+                Tensor::<$type_>::new(w_src.into_iter().map($type_converter).collect(), &vec![2]);
+            rms_norm(&mut y, &x, &w, 1e-6);
+            assert!(y.close_to(
+                &Tensor::<$type_>::new(
+                    vec![0.6324554, 2.5298216, 0.8485281, 2.2627416]
+                        .into_iter()
+                        .map($type_converter)
+                        .collect(),
+                    &vec![2, 2]
+                ),
+                $tolerance
+            ));
+        }};
+    }
+    test_rms_norm_for_float!(f32, 1e-6, f32::from);
+    test_rms_norm_for_float!(f64, 1e-6, f64::from);
+    use half::{bf16, f16};
+    test_rms_norm_for_float!(f16, f16::EPSILON, f16::from_f32);
+    test_rms_norm_for_float!(bf16, bf16::EPSILON, bf16::from_f32);
 }
 
 #[test]
 fn test_matmul_transb() {
-    let mut c = Tensor::<f32>::new(vec![1., 2., 3., 4.], &vec![2, 2]);
-    let a = Tensor::<f32>::new(vec![1., 2., 3., 4., 5., 6.], &vec![2, 3]);
-    let b = Tensor::<f32>::new(vec![1., 2., 3., 4., 5., 6.], &vec![2, 3]);
+    use std::vec::Vec;
+    let c_src: Vec<f32> = vec![1., 2., 3., 4.];
+    let a_src: Vec<f32> = vec![1., 2., 3., 4., 5., 6.];
+    let b_src: Vec<f32> = vec![1., 2., 3., 4., 5., 6.];
     //          [[1,2,3],  [[1,4],
     //  a@b^T =  [4,5,6]] x [2,5],  = [14,32]
     //                      [3,6]]    [32,77]
-    matmul_transb(&mut c, 1., &a, &b, 1.);
-    assert!(c.close_to(
-        &Tensor::<f32>::new(vec![15., 34., 35., 81.], &vec![2, 2]),
-        f32::EPSILON
-    ));
+
+    macro_rules! test_matmul_transb_for_float_type {
+        ($type_:ty, $tolerance:expr, $type_converter:expr) => {{
+            let mut c = Tensor::<$type_>::new(
+                c_src.iter().cloned().map($type_converter).collect(),
+                &vec![2, 2],
+            );
+            let a = Tensor::<$type_>::new(
+                a_src.iter().cloned().map($type_converter).collect(),
+                &vec![2, 3],
+            );
+            let b = Tensor::<$type_>::new(
+                b_src.iter().cloned().map($type_converter).collect(),
+                &vec![2, 3],
+            );
+            matmul_transb(&mut c, 1., &a, &b, 1.);
+            let tol = <$type_>::from($tolerance);
+            assert!(c.close_to(
+                &Tensor::<$type_>::new(
+                    vec![15., 34., 35., 81.]
+                        .into_iter()
+                        .map($type_converter)
+                        .collect(),
+                    &vec![2, 2]
+                ),
+                tol
+            ));
+        }};
+    }
+    test_matmul_transb_for_float_type!(f32, 1e-6, f32::from);
+    test_matmul_transb_for_float_type!(f64, 1e-6, f64::from);
+    use half::{bf16, f16};
+    test_matmul_transb_for_float_type!(f16, f16::EPSILON, f16::from_f32);
+    test_matmul_transb_for_float_type!(bf16, bf16::EPSILON, bf16::from_f32);
 }
 
 #[test]
 fn test_dot_product() {
-    let x = Tensor::<f32>::new(vec![1., 2., 3., 4.], &vec![1, 4]);
-    let y = Tensor::<f32>::new(vec![2., 2., 3., 4.], &vec![1, 4]);
-    assert!((dot(&x, &y) - 31.).abs() <= f32::EPSILON);
+    macro_rules! test_dot_product_for_integer_type {
+        ($type_:ty, $src_ty:ty) => {{
+            use std::vec::Vec;
+            let x: Vec<$src_ty> = vec![1, 2, 3, 4];
+            let y: Vec<$src_ty> = vec![2, 2, 3, 3];
+            let x = x.into_iter().map(Into::into);
+            let y = y.into_iter().map(Into::into);
+            let x = Tensor::<$type_>::new(x.collect(), &vec![1, 4]);
+            let y = Tensor::<$type_>::new(y.collect(), &vec![1, 4]);
+            assert!(dot(&x, &y) == 27);
+        }};
+    }
+    test_dot_product_for_integer_type!(i8, i8);
+    test_dot_product_for_integer_type!(i16, i8);
+    test_dot_product_for_integer_type!(i32, i8);
+    test_dot_product_for_integer_type!(i64, i8);
+    test_dot_product_for_integer_type!(u8, u8);
+    test_dot_product_for_integer_type!(u16, u8);
+    test_dot_product_for_integer_type!(u32, u8);
+    test_dot_product_for_integer_type!(u64, u8);
 
-    let x = Tensor::<i8>::new(vec![1, 2, 3], &vec![4]);
-    let y = Tensor::<i8>::new(vec![2, 2, 3], &vec![4]);
-    assert!(dot(&x, &y) == 15);
+    macro_rules! test_dot_product_for_float_type {
+        ($type_:ty, $tolerance:expr, $type_converter:expr) => {{
+            let x = vec![1., 2., 3., 4.].into_iter().map($type_converter);
+            let y = vec![2., 2., 3., 4.].into_iter().map($type_converter);
+            let x = Tensor::<$type_>::new(x.collect(), &vec![1, 4]);
+            let y = Tensor::<$type_>::new(y.collect(), &vec![1, 4]);
+            let correct = $type_converter(31.);
+            assert!((dot(&x, &y) - correct).abs() <= $tolerance);
+        }};
+    }
+    test_dot_product_for_float_type!(f32, 1e-6, f32::from);
+    test_dot_product_for_float_type!(f64, 1e-6, f64::from);
+    use half::{bf16, f16};
+    test_dot_product_for_float_type!(f16, f16::EPSILON, f16::from_f32);
+    test_dot_product_for_float_type!(bf16, bf16::EPSILON, bf16::from_f32);
 }
