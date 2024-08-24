@@ -15,7 +15,7 @@ pub struct KVCache<T: Num + Default + Copy> {
 }
 
 impl<T: Num + Default + Copy> KVCache<T> {
-    pub fn new(n_layers: usize, max_seq_len: usize, dim: usize, seq_len: usize) -> Self {
+    pub fn new(n_layers: usize, max_seq_len: usize, dim: usize) -> Self {
         KVCache {
             k_cache: (0..n_layers)
                 .map(|_| Tensor::default(&[max_seq_len, dim]))
@@ -25,7 +25,7 @@ impl<T: Num + Default + Copy> KVCache<T> {
                 .collect(),
             max_seq_len,
             dim,
-            seq_len,
+            seq_len: 0,
         }
     }
 

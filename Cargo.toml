@@ -1,5 +1,5 @@
 [package]
-name = "learning-lm-rust"
+name = "lm-infer"
 version = "0.1.0"
 edition = "2021"
 
@@ -18,3 +18,6 @@ half = { version = "2.4.1", features = ["std", "num-traits", "serde"] }
 default = ["perf"]
 rayon = ["dep:rayon"]
 perf = []
+
+[[bin]]
+name = "story-teller"

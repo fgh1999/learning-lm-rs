@@ -22,17 +22,18 @@ pub struct LLamaParams<T: Num> {
 }
 
 impl LLamaParams<f32> {
-    pub fn from_safetensors(safetensor: &SafeTensors, config: &LlamaConfigJson) -> Self {
+    pub fn from_safetensors(tensors: &SafeTensors, config: &LlamaConfigJson) -> Self {
         let get_tensor = |name: &str| -> Tensor<f32> {
-            let tensor_view = safetensor.tensor(name).unwrap();
+            let tensor_view = tensors.tensor(name).unwrap();
             match tensor_view.dtype() {
                 safetensors::Dtype::F32 => {
                     // from litte endian data (`_tobytes`)
                     let data_from_bytes = tensor_view
                         .data()
                         .chunks_exact(core::mem::size_of::<f32>())
-                        .map(|bytes| f32::from_le_bytes(bytes.try_into().unwrap()));
-                    Tensor::new(data_from_bytes.collect(), tensor_view.shape())
+                        .map(|bytes| f32::from_le_bytes(bytes.try_into().unwrap()))
+                        .collect();
+                    Tensor::new(data_from_bytes, tensor_view.shape())
                 }
                 _ => unimplemented!(),
             }

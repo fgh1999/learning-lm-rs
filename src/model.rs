@@ -42,10 +42,13 @@ pub struct PerfInfo {
     prompt_duration: Option<std::time::Duration>,
 }
 
-impl<T: Num + Default + Copy + Clone> Llama<T> {
-    pub fn new_kvcache(&self) -> KVCache<T> {
-        KVCache::new(self.n_layers, self.max_seq_len, self.n_kv_h * self.dqkv, 0)
-    }
+pub trait LmModel<T: Float + Default + Copy + Clone> {
+    fn forward(&self, input: &Tensor<u32>, cache: &mut KVCache<T>) -> Tensor<T>;
+    fn layer_num(&self) -> usize;
+    fn max_seq_len(&self) -> usize;
+    fn kv_dim(&self) -> usize;
+    fn bos_token_id(&self) -> u32;
+    fn eos_token_id(&self) -> u32;
 }
 
 impl<
@@ -60,9 +63,9 @@ impl<
             + Clone
             + Default
             + TotalOrder,
-    > Llama<T>
+    > LmModel<T> for Llama<T>
 {
-    pub fn forward(&self, input: &Tensor<u32>, cache: &mut KVCache<T>) -> Tensor<T> {
+    fn forward(&self, input: &Tensor<u32>, cache: &mut KVCache<T>) -> Tensor<T> {
         let seq_len = input.size();
         let past_seq_len = *cache.seq_len();
         *cache.seq_len_mut() += seq_len;
@@ -162,56 +165,20 @@ impl<
         logits
     }
 
-    pub fn generate(
-        &self,
-        token_ids: &[u32],
-        max_len: usize,
-        top_p: f32,
-        top_k: u32,
-        temperature: f32,
-    ) -> Vec<u32> {
-        let max_len = max_len.min(self.max_seq_len - token_ids.len());
-        debug_assert!(max_len > 0);
-
-        let mut cache = self.new_kvcache();
-        let mut result = Vec::<u32>::new();
-
-        macro_rules! generate_next {
-            ($prompt_token_ids:expr) => {{
-                let token_ids_len = $prompt_token_ids.len();
-                let token_tensor = Tensor::<u32>::new($prompt_token_ids, &[1, token_ids_len]);
-                let logits = self.forward(&token_tensor, &mut cache);
-                OP::random_sample(&logits, top_p, top_k, temperature)
-            }};
-        }
-
-        #[cfg(feature = "perf")]
-        let start = std::time::Instant::now();
-
-        result.push({
-            let prompt_token_ids = if !token_ids.is_empty() {
-                token_ids.to_vec()
-            } else {
-                vec![self.bos_token_id]
-            };
-            generate_next!(prompt_token_ids)
-        });
-
-        #[cfg(feature = "perf")]
-        let first_iter_duration = start.elapsed();
-
-        while result.len() < max_len && result.last() != Some(&self.eos_token_id) {
-            result.push(generate_next!(vec![*result.last().unwrap()]));
-        }
-
-        #[cfg(feature = "perf")]
-        {
-            let mut perf_info = self.perf_info.lock().unwrap();
-            perf_info.total_generation_duration = Some(start.elapsed());
-            perf_info.prompt_duration = Some(first_iter_duration);
-        }
-
-        result
+    fn layer_num(&self) -> usize {
+        self.n_layers
+    }
+    fn max_seq_len(&self) -> usize {
+        self.max_seq_len
+    }
+    fn kv_dim(&self) -> usize {
+        self.n_kv_h * self.dqkv
+    }
+    fn bos_token_id(&self) -> u32 {
+        self.bos_token_id
+    }
+    fn eos_token_id(&self) -> u32 {
+        self.eos_token_id
     }
 }
 
@@ -370,7 +337,7 @@ pub fn test_mlp() {
 }
 
 #[test]
-pub fn test_load_safetensors() {
+pub fn test_load_safetensors_from_story_model() {
     use crate::tensor::float_eq;
     use std::path::PathBuf;
     let project_dir = env!("CARGO_MANIFEST_DIR");
