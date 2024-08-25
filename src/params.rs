@@ -47,7 +47,11 @@ impl LLamaParams<f32> {
             };
         }
         LLamaParams {
-            embedding_table: get_tensor("lm_head.weight"),
+            embedding_table: if config.tie_word_embeddings {
+                get_tensor("lm_head.weight")
+            } else {
+                get_tensor("model.embed_tokens.weight")
+            },
 
             rms_att_w: get_tensor_vec!("model.layers.{}.input_layernorm.weight"),
             wq: get_tensor_vec!("model.layers.{}.self_attn.q_proj.weight"),

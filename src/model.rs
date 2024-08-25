@@ -403,3 +403,25 @@ pub fn test_load_safetensors_from_story_model() {
     ));
     assert!(float_eq(&model.params.wo[0].data()[100], &0.01965332, 1e-6));
 }
+
+#[test]
+pub fn test_load_safetensors_from_chat_model() {
+    use crate::tensor::float_eq;
+    use std::path::PathBuf;
+    let project_dir = env!("CARGO_MANIFEST_DIR");
+    let model_dir = PathBuf::from(project_dir).join("models").join("chat");
+    let model = Llama::from_safetensors(model_dir);
+    assert_eq!(model.vocab, 32002);
+    assert_eq!(model.n_layers, 10);
+    assert_eq!(model.n_q_h, 12);
+    assert_eq!(model.n_kv_h, 4);
+    assert_eq!(model.d, 312);
+    assert_eq!(model.dqkv, 26);
+    assert_eq!(model.di, 1092);
+
+    assert!(float_eq(
+        &model.params.embedding_table.data()[50],
+        &-0.018187439,
+        1e-6
+    ));
+}
