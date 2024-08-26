@@ -7,6 +7,8 @@ use crate::{
 };
 use getset::Getters;
 use num_traits::{float::TotalOrder, Float, Num};
+#[cfg(feature = "rayon")]
+use rayon::prelude::*;
 use safetensors::SafeTensors;
 use std::{
     fs::File,
@@ -97,9 +99,27 @@ impl<
                 let q = q_buf.reshape(&[seq_len, self.n_q_h * self.dqkv]); // (seq, n_h * dqkv)
                 let k = &mut cache.k_cache(layer, past_seq_len); // (seq, n_kv_h * dqkv)
                 let v = &mut cache.v_cache(layer, past_seq_len); // (seq, n_kv_h * dqkv)
-                OP::matmul_transb(q, 0., &hidden_states, &self.params.wq[layer], 1.0);
-                OP::matmul_transb(k, 0., &hidden_states, &self.params.wk[layer], 1.0);
-                OP::matmul_transb(v, 0., &hidden_states, &self.params.wv[layer], 1.0);
+                OP::matmul_transb(
+                    q,
+                    T::zero(),
+                    &hidden_states,
+                    &self.params.wq[layer],
+                    T::one(),
+                );
+                OP::matmul_transb(
+                    k,
+                    T::zero(),
+                    &hidden_states,
+                    &self.params.wk[layer],
+                    T::one(),
+                );
+                OP::matmul_transb(
+                    v,
+                    T::zero(),
+                    &hidden_states,
+                    &self.params.wv[layer],
+                    T::one(),
+                );
                 OP::rope(
                     q.reshape(&[seq_len, self.n_q_h, self.dqkv]),
                     past_seq_len,
@@ -128,10 +148,10 @@ impl<
                 );
                 OP::matmul_transb(
                     &mut residual,
-                    1.,
+                    T::one(),
                     &hidden_states,
                     &self.params.wo[layer],
-                    1.,
+                    T::one(),
                 );
             }
 
@@ -148,8 +168,9 @@ impl<
             );
         }
 
-        let mut hidden_states = hidden_states.slice((seq_len - 1) * self.d, &[1, self.d]);
-        let residual = residual.slice((seq_len - 1) * self.d, &[1, self.d]);
+        let mut hidden_states =
+            hidden_states.slice(hidden_states.to_offset(&[seq_len - 1, 0]), &[1, self.d]);
+        let residual = residual.slice(residual.to_offset(&[seq_len - 1, 0]), &[1, self.d]);
         OP::rms_norm(
             &mut hidden_states,
             &residual,
@@ -160,7 +181,13 @@ impl<
         // No matter what seq_len, the output is always a 1D vector of length vocab,
         // which contains the probabilities for the next token.
         let mut logits = Tensor::<T>::default(&[1, self.vocab]);
-        OP::matmul_transb(&mut logits, 0., &hidden_states, &self.params.lm_head, 1.0);
+        OP::matmul_transb(
+            &mut logits,
+            T::zero(),
+            &hidden_states,
+            &self.params.lm_head,
+            T::one(),
+        );
 
         logits
     }
@@ -211,8 +238,8 @@ impl Llama<f32> {
 }
 
 fn self_attention<P: Float + std::iter::Sum + Sync + Send + MulAssign + DivAssign + AddAssign>(
-    hidden_states: &mut Tensor<P>, // (seq, n_kv_h * n_groups * dqkv)
-    att_scores: &mut Tensor<P>,    // (n_kv_h, n_groups, seq, total_seq)
+    hidden_states: &mut Tensor<P>, // (seq, n_kv_h * n_groups * dqkv) as return value
+    att_scores: &mut Tensor<P>,    // (n_kv_h, n_groups, seq, total_seq) as buffer
     q: &Tensor<P>,                 // (seq, n_kv_h * n_groups, dqkv)
     k: &Tensor<P>,                 // (total_seq, n_kv_h * dqkv)
     v: &Tensor<P>,                 // (total_seq, n_kv_h * dqkv)
@@ -232,35 +259,45 @@ fn self_attention<P: Float + std::iter::Sum + Sync + Send + MulAssign + DivAssig
     let k = k.slice(0, &[total_seq_len, n_kv_h, dqkv]);
     let dqkv_root = P::from(dqkv).unwrap().sqrt();
 
+    let att_indices: Vec<_> = cartesian_product2(0..seq_len, 0..total_seq_len)
+        // skip masked calculation
+        .filter(|&(seq_idx, tseq_idx)| (total_seq_len - seq_len) + seq_idx >= tseq_idx)
+        .collect();
+
     cartesian_product2(0..n_kv_h, 0..n_groups).for_each(|(kv_idx, g_idx)| {
-        let mut att_result = {
-            let start = Tensor::<P>::index_to_offset(&[kv_idx, g_idx, 0, 0], att_scores.shape());
-            let shape = [seq_len, total_seq_len];
-            att_scores.slice(start, &shape)
-        };
-        cartesian_product2(0..seq_len, 0..total_seq_len)
-            // skip masked calculation
-            .filter(|&(seq_idx, tseq_idx)| (total_seq_len - seq_len) + seq_idx >= tseq_idx)
-            .for_each(|(seq_idx, tseq_idx)| {
-                let q_vec = q.slice(
-                    Tensor::<P>::index_to_offset(&[seq_idx, kv_idx, g_idx, 0], q.shape()),
-                    &[dqkv],
-                );
-                let k_vec = k.slice(
-                    Tensor::<P>::index_to_offset(&[tseq_idx, kv_idx, 0], k.shape()),
-                    &[dqkv],
-                );
-                unsafe {
-                    att_result.with_data_mut_at(&[seq_idx, tseq_idx], |_| {
-                        OP::dot(&q_vec, &k_vec) / dqkv_root
-                    });
-                }
-            });
+        #[cfg(feature = "rayon")]
+        let att_idx_iter = att_indices.par_iter();
+        #[cfg(not(feature = "rayon"))]
+        let att_idx_iter = att_indices.iter();
+
+        att_idx_iter.for_each(|&(seq_idx, tseq_idx)| {
+            let q_vec = q.slice(
+                Tensor::<P>::index_to_offset(&[seq_idx, kv_idx, g_idx, 0], q.shape()),
+                &[dqkv],
+            );
+            let k_vec = k.slice(
+                Tensor::<P>::index_to_offset(&[tseq_idx, kv_idx, 0], k.shape()),
+                &[dqkv],
+            );
+            let att_score = OP::dot(&q_vec, &k_vec) / dqkv_root;
+            let mut a = att_scores.slice(
+                Tensor::<P>::index_to_offset(
+                    &[kv_idx, g_idx, seq_idx, tseq_idx],
+                    att_scores.shape(),
+                ),
+                &[1],
+            );
+            unsafe {
+                a.data_mut()[0] = att_score;
+            }
+        });
     });
     OP::masked_softmax(att_scores);
 
     let v = v.slice(0, &[total_seq_len, n_kv_h, dqkv]);
+    unsafe { hidden_states.erase(); } // use as buffer
     let hidden = hidden_states.slice(0, &[seq_len, n_kv_h, n_groups, dqkv]);
+
     cartesian_product2(0..n_groups, 0..seq_len).for_each(|(g_idx, seq_idx)| {
         cartesian_product2(0..n_kv_h, 0..total_seq_len).for_each(|(kv_idx, tseq_idx)| {
             let v_vec = v.slice(
@@ -272,17 +309,20 @@ fn self_attention<P: Float + std::iter::Sum + Sync + Send + MulAssign + DivAssig
                 Tensor::<P>::index_to_offset(&[seq_idx, kv_idx, g_idx, 0], hidden.shape()),
                 &[dqkv],
             );
-            let hv = unsafe { hidden_vec.data_mut() };
-            hv.iter_mut()
-                .zip(v_vec.data())
-                .for_each(|(h, &val)| *h += val * att_score);
+            unsafe {
+                hidden_vec
+                    .data_mut()
+                    .iter_mut()
+                    .zip(v_vec.data())
+                    .for_each(|(h, &val)| *h += val * att_score)
+            };
         });
     });
 }
 
 fn mlp<P: Float + std::iter::Sum + Sync + Send + MulAssign>(
-    residual: &mut Tensor<P>,
-    hidden_states: &mut Tensor<P>,
+    residual: &mut Tensor<P>,      // as input and output
+    hidden_states: &mut Tensor<P>, // as buffer
     gate: &mut Tensor<P>,
     up: &mut Tensor<P>,
     w_up: &Tensor<P>,
@@ -292,10 +332,10 @@ fn mlp<P: Float + std::iter::Sum + Sync + Send + MulAssign>(
     eps: impl Float,
 ) {
     OP::rms_norm(hidden_states, residual, rms_w, eps);
-    OP::matmul_transb(gate, 0., hidden_states, w_gate, 1.);
-    OP::matmul_transb(up, 0., hidden_states, w_up, 1.);
+    OP::matmul_transb(gate, P::zero(), hidden_states, w_gate, P::one());
+    OP::matmul_transb(up, P::zero(), hidden_states, w_up, P::one());
     OP::silu(up, gate);
-    OP::matmul_transb(residual, 1., up, w_down, 1.);
+    OP::matmul_transb(residual, P::one(), up, w_down, P::one());
 }
 
 #[test]
@@ -410,6 +450,10 @@ pub fn test_load_safetensors_from_chat_model() {
     use std::path::PathBuf;
     let project_dir = env!("CARGO_MANIFEST_DIR");
     let model_dir = PathBuf::from(project_dir).join("models").join("chat");
+    if !model_dir.exists() {
+        return;
+    }
+
     let model = Llama::from_safetensors(model_dir);
     assert_eq!(model.vocab, 32002);
     assert_eq!(model.n_layers, 10);
@@ -422,6 +466,16 @@ pub fn test_load_safetensors_from_chat_model() {
     assert!(float_eq(
         &model.params.embedding_table.data()[50],
         &-0.018187439,
+        1e-6
+    ));
+    assert!(float_eq(
+        &model.params.embedding_table.data_at(&[31012, 55]),
+        &-0.009104947,
+        1e-6
+    ));
+    assert!(float_eq(
+        &model.params.lm_head.data_at(&[20100, 3]),
+        &-0.032863498,
         1e-6
     ));
 }
