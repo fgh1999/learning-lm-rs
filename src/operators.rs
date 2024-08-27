@@ -1,7 +1,12 @@
-use std::ops::{DivAssign, MulAssign};
+use std::{
+    collections::HashSet,
+    ops::{DivAssign, MulAssign},
+};
 
-use crate::tensor::Tensor;
+use crate::tensor::{Tensor, TensorView, WritableTensorView};
 use num_traits::{float::TotalOrder, Float, Num};
+#[cfg(feature = "rayon")]
+use rayon::prelude::*;
 
 // get (row) vectors from a 2D table given a list of indices
 pub fn gather<P: Num + Copy + Clone>(y: &mut Tensor<P>, indices: &Tensor<u32>, table: &Tensor<P>) {
@@ -11,14 +16,16 @@ pub fn gather<P: Num + Copy + Clone>(y: &mut Tensor<P>, indices: &Tensor<u32>, t
     let length = indices.size();
     assert!(y.size() == length * dim);
     for i in 0..length {
-        let src = &table.data()[indices.data()[i] as usize * dim..][..dim];
-        let dst = &mut unsafe { y.data_mut() }[i * dim..][..dim];
-        dst.copy_from_slice(src);
+        let src = table.slice(table.to_offset(&[indices.data()[i] as usize, 0]), &[dim]);
+        let mut dst = y.slice(y.to_offset(&[i, 0]), &[dim]);
+        unsafe {
+            dst.data_mut().copy_from_slice(src.data());
+        }
     }
 }
 
 // RoPE: Rotary Positional Embedding
-pub fn rope<P: Float>(y: &mut Tensor<P>, start_pos: usize, theta: impl Float) {
+pub fn rope<P: Float, D: WritableTensorView<P>>(y: &mut D, start_pos: usize, theta: impl Float) {
     let shape = y.shape();
     assert!(shape.len() == 3);
     let seq_len = shape[0];
@@ -88,6 +95,7 @@ pub fn rms_norm<P: Float + std::iter::Sum>(
     debug_assert!(w
         .shape()
         .iter()
+        .rev()
         .zip(x.shape().iter().rev())
         .all(|(&w_s, &x_s)| w_s == x_s));
     let epsilon = P::from(epsilon).unwrap();
@@ -111,20 +119,49 @@ pub fn rms_norm<P: Float + std::iter::Sum>(
 
 // y = sigmoid(x) * x * y
 // hint: this is an element-wise operation
-pub fn silu<P: Float + MulAssign>(y: &mut Tensor<P>, x: &Tensor<P>) {
+pub fn silu<P: Float + MulAssign, T: TensorView<P>>(y: &mut Tensor<P>, x: &T) {
     debug_assert!(y.size() == x.size());
-    let silu_x = x
-        .data()
-        .iter()
-        .cloned()
-        .map(|x| x / (P::one() + (-x).exp()));
+    let silu_x = x.data_iter().cloned().map(|x| x / (P::one() + (-x).exp()));
     unsafe { y.data_mut() }
         .iter_mut()
         .zip(silu_x)
         .for_each(|(y, x)| *y *= x);
 }
 
-fn check_matmul_shape<P: Num>(c: &Tensor<P>, a: &Tensor<P>, b: &Tensor<P>) {
+pub fn repetition_penalty<P: Float>(
+    logits: &mut Tensor<P>,
+    repetition_penalty: impl Float,
+    prompt_token_ids: &[u32],
+) {
+    let repetition_penalty = P::from(repetition_penalty).unwrap();
+    let used_token_ids = prompt_token_ids.iter().cloned().collect::<HashSet<_>>();
+
+    let logits_shape = logits.shape().clone();
+    let need_to_reshape = logits.shape().len() > 1;
+    if need_to_reshape {
+        logits.reshape(&[logits.size()]);
+    }
+    for i in used_token_ids {
+        unsafe {
+            logits.with_data_mut_at(&[i as usize], |&p| {
+                if p.is_sign_positive() {
+                    p / repetition_penalty
+                } else {
+                    p * repetition_penalty
+                }
+            });
+        }
+    }
+    if need_to_reshape {
+        logits.reshape(&logits_shape);
+    }
+}
+
+fn check_matmul_shape<P: Num, T0: TensorView<P>, T1: TensorView<P>, T2: TensorView<P>>(
+    c: &T0,
+    a: &T1,
+    b: &T2,
+) {
     debug_assert!(c.shape().len() == 2);
     debug_assert!(a.shape().len() == 2);
     debug_assert!(b.shape().len() == 2);
@@ -136,11 +173,16 @@ fn check_matmul_shape<P: Num>(c: &Tensor<P>, a: &Tensor<P>, b: &Tensor<P>) {
 // C = beta * C + alpha * A @ B^T
 // Assume that A is of shape (m, k), B is of shape (n, k), C is of shape (m, n).
 #[cfg(not(feature = "rayon"))]
-pub fn matmul_transb<P: Float + std::iter::Sum, W: Float>(
-    c: &mut Tensor<P>,
+pub fn matmul_transb<
+    P: Float + std::iter::Sum,
+    W: Float,
+    D: WritableTensorView<P>,
+    S: TensorView<P>,
+>(
+    c: &mut D,
     beta: W,
-    a: &Tensor<P>,
-    b: &Tensor<P>,
+    a: &S,
+    b: &S,
     alpha: W,
 ) {
     check_matmul_shape(c, a, b);
@@ -149,8 +191,8 @@ pub fn matmul_transb<P: Float + std::iter::Sum, W: Float>(
     let alpha = P::from(alpha).unwrap();
 
     cartesian_product2(0..c.shape()[0], 0..c.shape()[1]).for_each(|(i, j)| {
-        let a_vec = a.slice(Tensor::<P>::index_to_offset(&[i, 0], a.shape()), &vec_shape);
-        let b_vec = b.slice(Tensor::<P>::index_to_offset(&[j, 0], b.shape()), &vec_shape);
+        let a_vec = a.slice(a.to_offset(&[i, 0]), &vec_shape);
+        let b_vec = b.slice(b.to_offset(&[j, 0]), &vec_shape);
         let prod = dot(&a_vec, &b_vec);
         unsafe {
             c.with_data_mut_at(&[i, j], |&prev| alpha * prod + beta * prev);
@@ -159,11 +201,17 @@ pub fn matmul_transb<P: Float + std::iter::Sum, W: Float>(
 }
 
 #[cfg(feature = "rayon")]
-pub fn matmul_transb<'a, P: Float + std::iter::Sum + Sync + Send, W: Float>(
-    c: &'a mut Tensor<P>,
+pub fn matmul_transb<
+    'a,
+    P: Float + std::iter::Sum + Sync + Send + 'a,
+    W: Float,
+    D: WritableTensorView<P>,
+    S: TensorView<P> + Sync,
+>(
+    c: &'a mut D,
     beta: W,
-    a: &'a Tensor<P>,
-    b: &'a Tensor<P>,
+    a: &'a S,
+    b: &'a S,
     alpha: W,
 ) where
     Vec<(usize, &'a mut P)>: rayon::iter::IntoParallelIterator<Item = (usize, &'a mut P)>,
@@ -173,9 +221,8 @@ pub fn matmul_transb<'a, P: Float + std::iter::Sum + Sync + Send, W: Float>(
     let beta = P::from(beta).unwrap();
     let alpha = P::from(alpha).unwrap();
 
-    use rayon::prelude::*;
-    let c_shape = c.shape().clone();
-    let mut c_data: Vec<(usize, &mut P)> = unsafe { c.data_mut() }.iter_mut().enumerate().collect();
+    let c_shape = c.shape().to_owned();
+    let mut c_data: Vec<(usize, &mut P)> = unsafe { c.data_iter_mut() }.enumerate().collect();
     c_data.par_iter_mut().for_each(|(offset, c_val)| {
         let idx = Tensor::<P>::offset_to_index(*offset, &c_shape);
         let a_vec = a.slice(
@@ -203,15 +250,14 @@ where
 
 // Dot product of two tensors (treated as vectors)
 // #[cfg(not(feature = "rayon"))]
-pub fn dot<'a, T: Num + Copy + Clone + std::iter::Sum>(
-    x_vec: &'a Tensor<T>,
-    y_vec: &'a Tensor<T>,
-) -> T {
+pub fn dot<P: Num + Copy + Clone + std::iter::Sum, T0: TensorView<P>, T1: TensorView<P>>(
+    x_vec: &T0,
+    y_vec: &T1,
+) -> P {
     debug_assert!(x_vec.size() == y_vec.size());
     x_vec
-        .data()
-        .iter()
-        .zip(y_vec.data())
+        .data_iter()
+        .zip(y_vec.data_iter())
         .map(|(&a, &b)| a * b)
         .sum()
 }
@@ -230,8 +276,8 @@ pub fn dot<'a, T: Num + Copy + Clone + std::iter::Sum>(
 // }
 
 // Samples an index from a tensor (treated as a probability vector)
-pub fn random_sample<P: Float + Copy + Clone + TotalOrder>(
-    x: &Tensor<P>,
+pub fn random_sample<P: Float + Copy + Clone + TotalOrder, T: TensorView<P>>(
+    x: &T,
     top_p: f32,
     top_k: u32,
     temperature: f32,
@@ -239,8 +285,7 @@ pub fn random_sample<P: Float + Copy + Clone + TotalOrder>(
     assert!(x.shape().last().cloned().unwrap() == x.size());
     if temperature <= 0. || top_k < 2 || top_p <= 0. {
         return x
-            .data()
-            .iter()
+            .data_iter()
             .enumerate()
             .max_by(|(_, a), (_, b)| a.total_cmp(b))
             .unwrap()
@@ -280,8 +325,7 @@ pub fn random_sample<P: Float + Copy + Clone + TotalOrder>(
 
     // sort
     let mut logits = x
-        .data()
-        .iter()
+        .data_iter()
         .enumerate()
         .map(Probability::from)
         .collect::<Vec<_>>();
@@ -341,7 +385,7 @@ fn test_silu() {
 fn test_rms_norm() {
     macro_rules! test_rms_norm_for_float {
         ($type_:ty, $tolerance:expr, $type_converter:expr) => {{
-            let y_src = vec![1., 2., 3., 4.];
+            let y_src = vec![0., 0., 0., 0.];
             let x_src = vec![1., 2., 3., 4.];
             let w_src = vec![1., 2.];
 
@@ -378,15 +422,14 @@ fn test_rms_norm() {
 #[test]
 fn test_matmul_transb() {
     use std::vec::Vec;
-    let c_src: Vec<f32> = vec![1., 2., 3., 4.];
-    let a_src: Vec<f32> = vec![1., 2., 3., 4., 5., 6.];
-    let b_src: Vec<f32> = vec![1., 2., 3., 4., 5., 6.];
-    //          [[1,2,3],  [[1,4],
-    //  a@b^T =  [4,5,6]] x [2,5],  = [14,32]
-    //                      [3,6]]    [32,77]
-
     macro_rules! test_matmul_transb_for_float_type {
         ($type_:ty, $tolerance:expr, $type_converter:expr) => {{
+            let c_src: Vec<f32> = vec![1., 2., 3., 4.];
+            let a_src: Vec<f32> = vec![1., 2., 3., 4., 5., 6.];
+            let b_src: Vec<f32> = vec![1., 2., 3., 4., 5., 6.];
+            //          [[1,2,3],  [[1,4],
+            //  a@b^T =  [4,5,6]] x [2,5],  = [14,32]
+            //                      [3,6]]    [32,77]
             let mut c = Tensor::<$type_>::new(
                 c_src.iter().cloned().map($type_converter).collect(),
                 &vec![2, 2],

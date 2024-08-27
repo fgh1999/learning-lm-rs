@@ -19,13 +19,91 @@ impl<T: Num + Copy + Clone + Default> Tensor<T> {
     }
 }
 
-impl<T: Num + Copy + Clone> Tensor<T> {
-    pub fn data_at(&self, idx: &[usize]) -> T {
+pub trait TensorView<T> {
+    fn data_at(&self, idx: &[usize]) -> T;
+    fn data_iter<'a>(&'a self) -> impl Iterator<Item = &'a T>
+    where
+        T: 'a;
+    fn index_to_offset(idx: &[usize], shape: &[usize]) -> usize {
+        idx.iter()
+            .zip(shape)
+            .fold(0, |acc, (&i, &dim)| acc * dim + i)
+    }
+    fn offset_to_index(offset: usize, shape: &[usize]) -> Vec<usize> {
+        let mut idx = Vec::with_capacity(shape.len());
+        let mut offset = offset;
+        for &dim in shape.iter().rev() {
+            idx.push(offset % dim);
+            offset /= dim;
+        }
+        idx.reverse();
+        idx
+    }
+    fn to_offset(&self, idx: &[usize]) -> usize {
+        debug_assert!(self.shape().len() == idx.len());
+        debug_assert!(self.shape().iter().zip(idx.iter()).all(|(&s, &i)| i < s));
+        Self::index_to_offset(idx, self.shape())
+    }
+    fn size(&self) -> usize;
+    fn shape(&self) -> &[usize];
+    fn slice(&self, start: usize, shape: &[usize]) -> Self;
+}
+
+impl<T: Num + Copy + Clone> TensorView<T> for Tensor<T> {
+    fn data_at(&self, idx: &[usize]) -> T {
         self.data()[self.to_offset(idx)]
+    }
+    fn data_iter<'a>(&'a self) -> impl Iterator<Item = &'a T>
+    where
+        T: 'a,
+    {
+        self.data().iter()
+    }
+    fn slice(&self, start: usize, shape: &[usize]) -> Self {
+        let length: usize = shape.iter().product();
+        assert!(length <= self.length && start <= self.length - length);
+        Tensor {
+            data: self.data.clone(),
+            shape: shape.to_owned(),
+            offset: self.offset + start,
+            length,
+        }
+    }
+    fn size(&self) -> usize {
+        self.length
+    }
+    fn shape(&self) -> &[usize] {
+        &self.shape
     }
 }
 
-impl<T: Num> Tensor<T> {
+pub unsafe trait WritableTensorView<T>: TensorView<T> {
+    /// Mutates the tensor at a given index,
+    /// and returns the previous value.
+    unsafe fn with_data_mut_at(&mut self, idx: &[usize], op: impl FnOnce(&T) -> T) -> T;
+    unsafe fn data_iter_mut<'a>(&'a mut self) -> impl Iterator<Item = &'a mut T>
+    where
+        T: 'a;
+}
+unsafe impl<T: Num + Copy + Clone> WritableTensorView<T> for Tensor<T> {
+    unsafe fn with_data_mut_at(&mut self, idx: &[usize], op: impl FnOnce(&T) -> T) -> T {
+        let offset = self.to_offset(idx);
+        unsafe {
+            let ptr = self.data.as_ptr().add(self.offset + offset) as *mut T;
+            let prev_val = ptr.read();
+            ptr.write(op(&prev_val));
+            prev_val
+        }
+    }
+    unsafe fn data_iter_mut<'a>(&'a mut self) -> impl Iterator<Item = &'a mut T>
+    where
+        T: 'a,
+    {
+        self.data_mut().iter_mut()
+    }
+}
+
+impl<T: Num + Copy + Clone> Tensor<T> {
     pub fn new(data: Vec<T>, shape: &[usize]) -> Self {
         let length = data.len();
         Tensor {
@@ -40,49 +118,9 @@ impl<T: Num> Tensor<T> {
         &self.data[self.offset..][..self.length]
     }
 
-    fn check_idx(&self, idx: &[usize]) {
-        debug_assert!(self.shape().len() == idx.len());
-        debug_assert!(self.shape().iter().zip(idx.iter()).all(|(&s, &i)| i < s));
-    }
-
-    pub fn index_to_offset(idx: &[usize], shape: &[usize]) -> usize {
-        idx.iter()
-            .zip(shape)
-            .fold(0, |acc, (&i, &dim)| acc * dim + i)
-    }
-    pub fn offset_to_index(offset: usize, shape: &[usize]) -> Vec<usize> {
-        let mut idx = Vec::with_capacity(shape.len());
-        let mut offset = offset;
-        for &dim in shape.iter().rev() {
-            idx.push(offset % dim);
-            offset /= dim;
-        }
-        idx.reverse();
-        idx
-    }
-
-    pub fn to_offset(&self, idx: &[usize]) -> usize {
-        self.check_idx(idx);
-        Self::index_to_offset(idx, &self.shape)
-    }
-
     pub unsafe fn data_mut(&mut self) -> &mut [T] {
         let ptr = self.data.as_ptr().add(self.offset) as *mut T;
         slice::from_raw_parts_mut(ptr, self.length)
-    }
-
-    /// Mutates the tensor at a given index,
-    /// and returns the previous value.
-    pub unsafe fn with_data_mut_at(&mut self, idx: &[usize], op: impl FnOnce(&T) -> T) -> T {
-        let offset = self.to_offset(idx);
-        let ptr = self.data.as_ptr().add(self.offset + offset) as *mut T;
-        let prev_val = ptr.read();
-        ptr.write(op(&prev_val));
-        prev_val
-    }
-
-    pub fn size(&self) -> usize {
-        self.length
     }
 
     // Reinterpret the tensor as a new shape while preserving total size.
@@ -96,15 +134,8 @@ impl<T: Num> Tensor<T> {
         self
     }
 
-    pub fn slice(&self, start: usize, shape: &[usize]) -> Self {
-        let length: usize = shape.iter().product();
-        assert!(length <= self.length && start <= self.length - length);
-        Tensor {
-            data: self.data.clone(),
-            shape: shape.to_owned(),
-            offset: self.offset + start,
-            length,
-        }
+    pub unsafe fn erase(&mut self) {
+        self.data_mut().iter_mut().for_each(|x| *x = T::zero());
     }
 }
 
@@ -121,7 +152,7 @@ impl<T: Float> Tensor<T> {
 }
 
 // Some helper functions for testing and debugging
-impl<T: Num + Debug> Tensor<T> {
+impl<T: Num + Copy + Clone + Debug> Tensor<T> {
     #[allow(unused)]
     pub fn print(&self) {
         println!(
@@ -154,7 +185,7 @@ fn test_data_at_idx() {
 }
 
 #[test]
-fn test_mutate_dat_at_idx() {
+fn test_mutate_data_at_idx() {
     let mut t = Tensor::<f32>::new(vec![1., 2., 3., 4., 5., 6.], &vec![2, 3]);
     // [[1., 2., 3.],
     // [4., 5., 6.]]
@@ -166,4 +197,13 @@ fn test_mutate_dat_at_idx() {
     assert!(t.data_at(&[0, 1]) == 3.);
     assert!(t.data_at(&[0, 2]) == 4.);
     assert!(t.data_at(&[1, 0]) == 5.);
+}
+
+#[test]
+fn test_erase_tensor() {
+    let mut t = Tensor::<f32>::new(vec![1., 2., 3., 4., 5., 6.], &vec![2, 3]);
+    unsafe {
+        t.erase();
+    }
+    assert!(t.data().iter().all(|&x| x == 0.));
 }

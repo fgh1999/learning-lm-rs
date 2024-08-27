@@ -3,7 +3,7 @@ use crate::{
     kvcache::KVCache,
     operators::{self as OP, cartesian_product2},
     params::LLamaParams,
-    tensor::Tensor,
+    tensor::{Tensor, TensorView},
 };
 use getset::Getters;
 use num_traits::{float::TotalOrder, Float, Num};
@@ -44,17 +44,17 @@ pub struct PerfInfo {
     prompt_duration: Option<std::time::Duration>,
 }
 
-pub trait LmModel<T: Float + Default + Copy + Clone> {
-    fn forward(&self, input: &Tensor<u32>, cache: &mut KVCache<T>) -> Tensor<T>;
+pub trait LmModel<TID: Num + Copy, P: Float + Default + Copy + Clone> {
+    fn forward(&self, input: &Tensor<TID>, cache: &mut KVCache<TID, P>) -> Tensor<P>;
     fn layer_num(&self) -> usize;
     fn max_seq_len(&self) -> usize;
     fn kv_dim(&self) -> usize;
-    fn bos_token_id(&self) -> u32;
-    fn eos_token_id(&self) -> u32;
+    fn bos_token_id(&self) -> TID;
+    fn eos_token_id(&self) -> TID;
 }
 
 impl<
-        T: Float
+        P: Float
             + std::iter::Sum
             + Sync
             + Send
@@ -65,22 +65,24 @@ impl<
             + Clone
             + Default
             + TotalOrder,
-    > LmModel<T> for Llama<T>
+    > LmModel<u32, P> for Llama<P>
 {
-    fn forward(&self, input: &Tensor<u32>, cache: &mut KVCache<T>) -> Tensor<T> {
+    fn forward(&self, input: &Tensor<u32>, cache: &mut KVCache<u32, P>) -> Tensor<P> {
         let seq_len = input.size();
-        let past_seq_len = *cache.seq_len();
-        *cache.seq_len_mut() += seq_len;
-        let total_seq_len = past_seq_len + seq_len;
+        let past_seq_len = cache.seq_len();
+        input.data_iter().for_each(|&token_id| {
+            let _ = cache.push(token_id);
+        });
+        let total_seq_len = cache.seq_len();
         let n_groups = self.n_q_h / self.n_kv_h;
 
         // Some pre-allocated buffers that will be reused
-        let mut residual = Tensor::<T>::default(&[seq_len, self.d]);
-        let mut hidden_states = Tensor::<T>::default(&[seq_len, self.d]);
-        let mut q_buf = Tensor::<T>::default(&[seq_len, self.n_q_h * self.dqkv]);
-        let mut att_scores = Tensor::<T>::default(&[self.n_kv_h, n_groups, seq_len, total_seq_len]);
-        let mut gate_buf = Tensor::<T>::default(&[seq_len, self.di]);
-        let mut up_buf = Tensor::<T>::default(&[seq_len, self.di]);
+        let mut residual = Tensor::<P>::default(&[seq_len, self.d]);
+        let mut hidden_states = Tensor::<P>::default(&[seq_len, self.d]);
+        let mut q_buf = Tensor::<P>::default(&[seq_len, self.n_q_h * self.dqkv]);
+        let mut att_scores = Tensor::<P>::default(&[self.n_kv_h, n_groups, seq_len, total_seq_len]);
+        let mut gate_buf = Tensor::<P>::default(&[seq_len, self.di]);
+        let mut up_buf = Tensor::<P>::default(&[seq_len, self.di]);
 
         // Computation Starts Here
         // Embedding lookup
@@ -97,28 +99,28 @@ impl<
                 );
 
                 let q = q_buf.reshape(&[seq_len, self.n_q_h * self.dqkv]); // (seq, n_h * dqkv)
-                let k = &mut cache.k_cache(layer, past_seq_len); // (seq, n_kv_h * dqkv)
-                let v = &mut cache.v_cache(layer, past_seq_len); // (seq, n_kv_h * dqkv)
+                let k = &mut cache.k_cache_within(layer, past_seq_len..total_seq_len); // (seq, n_kv_h * dqkv)
+                let v = &mut cache.v_cache_within(layer, past_seq_len..total_seq_len); // (seq, n_kv_h * dqkv)
                 OP::matmul_transb(
                     q,
-                    T::zero(),
+                    P::zero(),
                     &hidden_states,
                     &self.params.wq[layer],
-                    T::one(),
+                    P::one(),
                 );
                 OP::matmul_transb(
                     k,
-                    T::zero(),
+                    P::zero(),
                     &hidden_states,
                     &self.params.wk[layer],
-                    T::one(),
+                    P::one(),
                 );
                 OP::matmul_transb(
                     v,
-                    T::zero(),
+                    P::zero(),
                     &hidden_states,
                     &self.params.wv[layer],
-                    T::one(),
+                    P::one(),
                 );
                 OP::rope(
                     q.reshape(&[seq_len, self.n_q_h, self.dqkv]),
@@ -131,15 +133,15 @@ impl<
                     self.rope_theta,
                 );
 
-                let full_k = &mut cache.k_cache(layer, 0); // (total_seq, n_kv_h * dqkv)
-                let full_v = &mut cache.v_cache(layer, 0); // (total_seq, n_kv_h * dqkv)
+                let full_k = cache.full_k_cache(layer); // (total_seq, n_kv_h * dqkv)
+                let full_v = cache.full_v_cache(layer); // (total_seq, n_kv_h * dqkv)
 
                 self_attention(
                     &mut hidden_states,
                     &mut att_scores,
                     q,
-                    full_k,
-                    full_v,
+                    &full_k,
+                    &full_v,
                     self.n_kv_h,
                     n_groups,
                     seq_len,
@@ -148,10 +150,10 @@ impl<
                 );
                 OP::matmul_transb(
                     &mut residual,
-                    T::one(),
+                    P::one(),
                     &hidden_states,
                     &self.params.wo[layer],
-                    T::one(),
+                    P::one(),
                 );
             }
 
@@ -180,13 +182,13 @@ impl<
 
         // No matter what seq_len, the output is always a 1D vector of length vocab,
         // which contains the probabilities for the next token.
-        let mut logits = Tensor::<T>::default(&[1, self.vocab]);
+        let mut logits = Tensor::<P>::default(&[1, self.vocab]);
         OP::matmul_transb(
             &mut logits,
-            T::zero(),
+            P::zero(),
             &hidden_states,
             &self.params.lm_head,
-            T::one(),
+            P::one(),
         );
 
         logits
@@ -237,12 +239,16 @@ impl Llama<f32> {
     }
 }
 
-fn self_attention<P: Float + std::iter::Sum + Sync + Send + MulAssign + DivAssign + AddAssign>(
+fn self_attention<
+    P: Float + std::iter::Sum + Sync + Send + MulAssign + DivAssign + AddAssign,
+    T0: TensorView<P> + Sync,
+    T1: TensorView<P> + Sync,
+>(
     hidden_states: &mut Tensor<P>, // (seq, n_kv_h * n_groups * dqkv) as return value
     att_scores: &mut Tensor<P>,    // (n_kv_h, n_groups, seq, total_seq) as buffer
-    q: &Tensor<P>,                 // (seq, n_kv_h * n_groups, dqkv)
-    k: &Tensor<P>,                 // (total_seq, n_kv_h * dqkv)
-    v: &Tensor<P>,                 // (total_seq, n_kv_h * dqkv)
+    q: &T0,                        // (seq, n_kv_h * n_groups, dqkv)
+    k: &T1,                        // (total_seq, n_kv_h * dqkv)
+    v: &T1,                        // (total_seq, n_kv_h * dqkv)
     n_kv_h: usize,
     n_groups: usize,
     seq_len: usize,
@@ -295,7 +301,9 @@ fn self_attention<P: Float + std::iter::Sum + Sync + Send + MulAssign + DivAssig
     OP::masked_softmax(att_scores);
 
     let v = v.slice(0, &[total_seq_len, n_kv_h, dqkv]);
-    unsafe { hidden_states.erase(); } // use as buffer
+    unsafe {
+        hidden_states.erase();
+    }
     let hidden = hidden_states.slice(0, &[seq_len, n_kv_h, n_groups, dqkv]);
 
     cartesian_product2(0..n_groups, 0..seq_len).for_each(|(g_idx, seq_idx)| {
@@ -313,7 +321,7 @@ fn self_attention<P: Float + std::iter::Sum + Sync + Send + MulAssign + DivAssig
                 hidden_vec
                     .data_mut()
                     .iter_mut()
-                    .zip(v_vec.data())
+                    .zip(v_vec.data_iter())
                     .for_each(|(h, &val)| *h += val * att_score)
             };
         });
