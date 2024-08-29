@@ -45,9 +45,9 @@ pub fn rope<P: Float, D: WritableTensorView<P>>(y: &mut D, start_pos: usize, the
 
                 let a_idx = [tok, head, i];
                 let b_idx = [tok, head, i + d / 2];
-                let b = y.data_at(&b_idx);
+                let b = *y.data_at(&b_idx);
                 unsafe {
-                    let a = y.with_data_mut_at(&a_idx, |&a| a * cos - b * sin);
+                    let a = y.with_data_mut_at(&a_idx, |a| a.mul(cos) - b * sin);
                     y.with_data_mut_at(&b_idx, |_| b * cos + a * sin);
                 }
             }

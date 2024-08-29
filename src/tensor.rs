@@ -20,7 +20,7 @@ impl<T: Num + Copy + Clone + Default> Tensor<T> {
 }
 
 pub trait TensorView<T> {
-    fn data_at(&self, idx: &[usize]) -> T;
+    fn data_at<'a>(&'a self, idx: &[usize]) -> &'a T;
     fn data_iter<'a>(&'a self) -> impl Iterator<Item = &'a T>
     where
         T: 'a;
@@ -50,8 +50,8 @@ pub trait TensorView<T> {
 }
 
 impl<T: Num + Copy + Clone> TensorView<T> for Tensor<T> {
-    fn data_at(&self, idx: &[usize]) -> T {
-        self.data()[self.to_offset(idx)]
+    fn data_at<'a>(&'a self, idx: &[usize]) -> &'a T {
+        &self.data()[self.to_offset(idx)]
     }
     fn data_iter<'a>(&'a self) -> impl Iterator<Item = &'a T>
     where
@@ -178,10 +178,10 @@ fn test_data_at_idx() {
     let t = Tensor::<f32>::new(vec![1., 2., 3., 4., 5., 6.], &vec![2, 3]);
     // [[1., 2., 3.],
     // [4., 5., 6.]]
-    assert!(t.data_at(&[0, 0]) == 1.);
-    assert!(t.data_at(&[0, 1]) == 2.);
-    assert!(t.data_at(&[0, 2]) == 3.);
-    assert!(t.data_at(&[1, 0]) == 4.);
+    assert_eq!(t.data_at(&[0, 0]), &1.);
+    assert_eq!(t.data_at(&[0, 1]), &2.);
+    assert_eq!(t.data_at(&[0, 2]), &3.);
+    assert_eq!(t.data_at(&[1, 0]), &4.);
 }
 
 #[test]
@@ -189,14 +189,14 @@ fn test_mutate_data_at_idx() {
     let mut t = Tensor::<f32>::new(vec![1., 2., 3., 4., 5., 6.], &vec![2, 3]);
     // [[1., 2., 3.],
     // [4., 5., 6.]]
-    assert!(unsafe { t.with_data_mut_at(&[0, 0], |x| x + 1.) } == 1.);
-    assert!(unsafe { t.with_data_mut_at(&[0, 1], |x| x + 1.) } == 2.);
-    assert!(unsafe { t.with_data_mut_at(&[0, 2], |x| x + 1.) } == 3.);
-    assert!(unsafe { t.with_data_mut_at(&[1, 0], |x| x + 1.) } == 4.);
-    assert!(t.data_at(&[0, 0]) == 2.);
-    assert!(t.data_at(&[0, 1]) == 3.);
-    assert!(t.data_at(&[0, 2]) == 4.);
-    assert!(t.data_at(&[1, 0]) == 5.);
+    assert_eq!(unsafe { t.with_data_mut_at(&[0, 0], |x| x + 1.) }, 1.);
+    assert_eq!(unsafe { t.with_data_mut_at(&[0, 1], |x| x + 1.) }, 2.);
+    assert_eq!(unsafe { t.with_data_mut_at(&[0, 2], |x| x + 1.) }, 3.);
+    assert_eq!(unsafe { t.with_data_mut_at(&[1, 0], |x| x + 1.) }, 4.);
+    assert_eq!(t.data_at(&[0, 0]), &2.);
+    assert_eq!(t.data_at(&[0, 1]), &3.);
+    assert_eq!(t.data_at(&[0, 2]), &4.);
+    assert_eq!(t.data_at(&[1, 0]), &5.);
 }
 
 #[test]

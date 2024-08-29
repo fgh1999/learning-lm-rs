@@ -70,9 +70,7 @@ impl<
     fn forward(&self, input: &Tensor<u32>, cache: &mut KVCache<u32, P>) -> Tensor<P> {
         let seq_len = input.size();
         let past_seq_len = cache.seq_len();
-        input.data_iter().for_each(|&token_id| {
-            let _ = cache.push(token_id);
-        });
+        cache.push_from(input.data()).unwrap();
         let total_seq_len = cache.seq_len();
         let n_groups = self.n_q_h / self.n_kv_h;
 
@@ -322,7 +320,7 @@ fn self_attention<
                     .data_mut()
                     .iter_mut()
                     .zip(v_vec.data_iter())
-                    .for_each(|(h, &val)| *h += val * att_score)
+                    .for_each(|(h, &val)| *h += att_score.mul(val))
             };
         });
     });
@@ -477,12 +475,12 @@ pub fn test_load_safetensors_from_chat_model() {
         1e-6
     ));
     assert!(float_eq(
-        &model.params.embedding_table.data_at(&[31012, 55]),
+        model.params.embedding_table.data_at(&[31012, 55]),
         &-0.009104947,
         1e-6
     ));
     assert!(float_eq(
-        &model.params.lm_head.data_at(&[20100, 3]),
+        model.params.lm_head.data_at(&[20100, 3]),
         &-0.032863498,
         1e-6
     ));
