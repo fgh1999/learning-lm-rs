@@ -44,7 +44,7 @@ pub struct PerfInfo {
     prompt_duration: Option<std::time::Duration>,
 }
 
-pub trait LmModel<TID: Num + Copy, P: Float + Default + Copy + Clone> {
+pub trait LmModel<TID: Num + Copy, P: Float + Default + Copy> {
     fn forward(&self, input: &Tensor<TID>, cache: &mut KVCache<TID, P>) -> Tensor<P>;
     fn layer_num(&self) -> usize;
     fn max_seq_len(&self) -> usize;

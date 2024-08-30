@@ -11,11 +11,9 @@ pub struct Tensor<T: Num> {
     length: usize,
 }
 
-impl<T: Num + Copy + Clone + Default> Tensor<T> {
+impl<T: Num + Copy + Default> Tensor<T> {
     pub fn default(shape: &[usize]) -> Self {
-        let length = shape.iter().product();
-        let data = vec![T::default(); length];
-        Self::new(data, shape)
+        Self::new(vec![T::default(); shape.iter().product()], shape)
     }
 }
 
@@ -49,7 +47,7 @@ pub trait TensorView<T> {
     fn slice(&self, start: usize, shape: &[usize]) -> Self;
 }
 
-impl<T: Num + Copy + Clone> TensorView<T> for Tensor<T> {
+impl<T: Num> TensorView<T> for Tensor<T> {
     fn data_at<'a>(&'a self, idx: &[usize]) -> &'a T {
         &self.data()[self.to_offset(idx)]
     }
@@ -96,7 +94,7 @@ pub unsafe trait WritableTensorView<T>: TensorView<T> {
     where
         T: 'a;
 }
-unsafe impl<T: Num + Copy + Clone> WritableTensorView<T> for Tensor<T> {
+unsafe impl<T: Num> WritableTensorView<T> for Tensor<T> {
     unsafe fn with_data_mut_at(&mut self, idx: &[usize], op: impl FnOnce(&T) -> T) -> T {
         let offset = self.to_offset(idx);
         unsafe {
@@ -114,7 +112,7 @@ unsafe impl<T: Num + Copy + Clone> WritableTensorView<T> for Tensor<T> {
     }
 }
 
-impl<T: Num + Copy + Clone> Tensor<T> {
+impl<T: Num> Tensor<T> {
     pub fn new(data: Vec<T>, shape: &[usize]) -> Self {
         let length = data.len();
         Tensor {
@@ -169,7 +167,7 @@ impl<T: Float> Tensor<T> {
 }
 
 // Some helper functions for testing and debugging
-impl<T: Num + Copy + Clone + Debug> Tensor<T> {
+impl<T: Num + Debug> Tensor<T> {
     #[allow(unused)]
     pub fn print(&self) {
         println!(

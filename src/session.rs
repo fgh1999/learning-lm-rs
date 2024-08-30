@@ -110,16 +110,7 @@ pub trait Generation {
 }
 
 impl<
-        P: Float
-            + std::iter::Sum
-            + Sync
-            + Send
-            + MulAssign
-            + DivAssign
-            + AddAssign
-            + Copy
-            + Clone
-            + Default,
+        P: Float + std::iter::Sum + Sync + Send + MulAssign + DivAssign + AddAssign + Copy + Default,
         M: LmModel<u32, P>,
     > Generation for LmSession<P, u32, M>
 {

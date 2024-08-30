@@ -9,7 +9,7 @@ use num_traits::{Float, Num};
 use rayon::prelude::*;
 
 // get (row) vectors from a 2D table given a list of indices
-pub fn gather<P: Num + Copy + Clone>(y: &mut Tensor<P>, indices: &Tensor<u32>, table: &Tensor<P>) {
+pub fn gather<P: Num + Copy>(y: &mut Tensor<P>, indices: &Tensor<u32>, table: &Tensor<P>) {
     let table_shape = table.shape();
     assert!(table_shape.len() == 2);
     let dim = table_shape[1];
@@ -250,7 +250,7 @@ where
 
 // Dot product of two tensors (treated as vectors)
 // #[cfg(not(feature = "rayon"))]
-pub fn dot<P: Num + Copy + Clone + std::iter::Sum, T0: TensorView<P>, T1: TensorView<P>>(
+pub fn dot<P: Num + Copy + std::iter::Sum, T0: TensorView<P>, T1: TensorView<P>>(
     x_vec: &T0,
     y_vec: &T1,
 ) -> P {
@@ -265,7 +265,7 @@ pub fn dot<P: Num + Copy + Clone + std::iter::Sum, T0: TensorView<P>, T1: Tensor
 // #[cfg(feature = "rayon")]
 // pub fn dot<'a, T>(x_vec: &'a Tensor<T>, y_vec: &'a Tensor<T>) -> T
 // where
-//     T: Num + Copy + Clone + std::iter::Sum + Sync + Send,
+//     T: Num + Copy + std::iter::Sum + Sync + Send,
 // {
 //     debug_assert!(x_vec.size() == y_vec.size());
 //     use rayon::{iter::ParallelIterator, prelude::IntoParallelIterator};
@@ -276,7 +276,7 @@ pub fn dot<P: Num + Copy + Clone + std::iter::Sum, T0: TensorView<P>, T1: Tensor
 // }
 
 // Samples an index from a tensor (treated as a probability vector)
-pub fn random_sample<P: Float + Copy + Clone, T: TensorView<P>>(
+pub fn random_sample<P: Float + Copy, T: TensorView<P>>(
     x: &T,
     top_p: f32,
     top_k: u32,
@@ -302,18 +302,18 @@ pub fn random_sample<P: Float + Copy + Clone, T: TensorView<P>>(
     }
 
     #[derive(Clone, Copy, PartialEq, Debug)]
-    struct Probability<T: Float + Copy + Clone> {
+    struct Probability<T: Float + Copy> {
         val: T,
         tok: u32,
     }
-    impl<T: Float + Copy + Clone> Eq for Probability<T> {}
-    impl<T: Float + Copy + Clone> PartialOrd for Probability<T> {
+    impl<T: Float + Copy> Eq for Probability<T> {}
+    impl<T: Float + Copy> PartialOrd for Probability<T> {
         #[inline]
         fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
             Some(self.cmp(other))
         }
     }
-    impl<T: Float + Copy + Clone> Ord for Probability<T> {
+    impl<T: Float + Copy> Ord for Probability<T> {
         #[inline]
         fn cmp(&self, other: &Self) -> Ordering {
             if self.val > other.val {
@@ -325,7 +325,7 @@ pub fn random_sample<P: Float + Copy + Clone, T: TensorView<P>>(
             }
         }
     }
-    impl<T: Float + Copy + Clone> From<(usize, &T)> for Probability<T> {
+    impl<T: Float + Copy> From<(usize, &T)> for Probability<T> {
         #[inline]
         fn from((i, &p): (usize, &T)) -> Self {
             Self {

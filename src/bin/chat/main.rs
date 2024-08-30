@@ -74,7 +74,7 @@ fn main() {
         prompt
             .chars()
             .fold((String::new(), ' '), |(mut s, last), c| {
-                if c.is_whitespace() && last.is_whitespace() {
+                if c.is_whitespace() && c == last {
                     (s, c)
                 } else {
                     s.push(c);
