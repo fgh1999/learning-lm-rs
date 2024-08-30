@@ -30,14 +30,14 @@ impl<TID: Num + Copy, P: Num + Default + Copy> KVCache<TID, P> {
         self.blocks.len()
     }
 
-    pub fn token_ids<'a>(&'a self) -> impl Iterator<Item = TID> + 'a {
+    pub fn token_ids(&self) -> impl Iterator<Item = TID> + '_ {
         self.blocks.iter().map(|block| block.token_id)
     }
 
     /// Pushes a new token to the cache
-    pub fn push(&mut self, token_id: TID) -> Result<(), ()> {
+    pub fn push(&mut self, token_id: TID) -> Result<(), &'static str> {
         if self.seq_len() >= self.max_seq_len {
-            return Err(());
+            return Err("Exceeds max sequence length");
         }
 
         self.blocks
@@ -45,9 +45,9 @@ impl<TID: Num + Copy, P: Num + Default + Copy> KVCache<TID, P> {
         Ok(())
     }
 
-    pub fn push_from(&mut self, token_ids: &[TID]) -> Result<(), ()> {
+    pub fn push_from(&mut self, token_ids: &[TID]) -> Result<(), &'static str> {
         if self.seq_len() + token_ids.len() > self.max_seq_len {
-            return Err(());
+            return Err("Exceeds max sequence length");
         }
 
         self.blocks.extend(
@@ -58,11 +58,11 @@ impl<TID: Num + Copy, P: Num + Default + Copy> KVCache<TID, P> {
         Ok(())
     }
 
-    pub fn k_cache_within<'a>(
-        &'a self,
+    pub fn k_cache_within(
+        &self,
         layer_idx: usize,
         seq_range: Range<usize>,
-    ) -> CachedTensor<'a, TID, P> {
+    ) -> CachedTensor<'_, TID, P> {
         assert!(layer_idx < self.layer_num);
         assert!(seq_range.end <= self.seq_len());
 
@@ -76,11 +76,11 @@ impl<TID: Num + Copy, P: Num + Default + Copy> KVCache<TID, P> {
             layer_idx,
         }
     }
-    pub fn v_cache_within<'a>(
-        &'a self,
+    pub fn v_cache_within(
+        &self,
         layer_idx: usize,
         seq_range: Range<usize>,
-    ) -> CachedTensor<'a, TID, P> {
+    ) -> CachedTensor<'_, TID, P> {
         assert!(layer_idx < self.layer_num);
         assert!(seq_range.end <= self.seq_len());
 
@@ -95,10 +95,10 @@ impl<TID: Num + Copy, P: Num + Default + Copy> KVCache<TID, P> {
         }
     }
 
-    pub fn full_k_cache<'a>(&'a self, layer_idx: usize) -> CachedTensor<'a, TID, P> {
+    pub fn full_k_cache(&self, layer_idx: usize) -> CachedTensor<'_, TID, P> {
         self.k_cache_within(layer_idx, 0..self.seq_len())
     }
-    pub fn full_v_cache<'a>(&'a self, layer_idx: usize) -> CachedTensor<'a, TID, P> {
+    pub fn full_v_cache(&self, layer_idx: usize) -> CachedTensor<'_, TID, P> {
         self.v_cache_within(layer_idx, 0..self.seq_len())
     }
 }

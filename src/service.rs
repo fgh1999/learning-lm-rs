@@ -21,9 +21,9 @@ pub struct ChatService<'source, G: Generation> {
 pub enum TemplateName {
     Chat,
 }
-impl Into<&str> for TemplateName {
-    fn into(self) -> &'static str {
-        match self {
+impl From<TemplateName> for &str {
+    fn from(val: TemplateName) -> Self {
+        match val {
             TemplateName::Chat => "chat",
         }
     }

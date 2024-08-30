@@ -77,10 +77,21 @@ impl<T: Num + Copy + Clone> TensorView<T> for Tensor<T> {
     }
 }
 
+/// # Safety
+///
+/// Writing to a tensor view is unsafe because it can not guarantee that the tensor is not shared.
 pub unsafe trait WritableTensorView<T>: TensorView<T> {
     /// Mutates the tensor at a given index,
     /// and returns the previous value.
+    ///
+    /// # Safety
+    ///
+    /// Writing to a tensor view is unsafe because it can not guarantee that the tensor is not shared.
     unsafe fn with_data_mut_at(&mut self, idx: &[usize], op: impl FnOnce(&T) -> T) -> T;
+
+    /// # Safety
+    ///
+    /// Writing to a tensor view is unsafe because it can not guarantee that the tensor is not shared.
     unsafe fn data_iter_mut<'a>(&'a mut self) -> impl Iterator<Item = &'a mut T>
     where
         T: 'a;
@@ -118,6 +129,9 @@ impl<T: Num + Copy + Clone> Tensor<T> {
         &self.data[self.offset..][..self.length]
     }
 
+    /// # Safety
+    ///
+    /// Writing to a tensor is unsafe because it can not guarantee that the tensor is not shared.
     pub unsafe fn data_mut(&mut self) -> &mut [T] {
         let ptr = self.data.as_ptr().add(self.offset) as *mut T;
         slice::from_raw_parts_mut(ptr, self.length)
@@ -134,6 +148,9 @@ impl<T: Num + Copy + Clone> Tensor<T> {
         self
     }
 
+    /// # Safety
+    ///
+    /// Writing to a tensor is unsafe because it can not guarantee that the tensor is not shared.
     pub unsafe fn erase(&mut self) {
         self.data_mut().iter_mut().for_each(|x| *x = T::zero());
     }

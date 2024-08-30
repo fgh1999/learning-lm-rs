@@ -1,6 +1,6 @@
 use crate::{kvcache::KVCache, model::LmModel, operators as OP, tensor::Tensor};
 use getset::Getters;
-use num_traits::{float::TotalOrder, Float, Num};
+use num_traits::{Float, Num};
 use std::{
     ops::{AddAssign, DivAssign, MulAssign},
     sync::Arc,
@@ -119,8 +119,7 @@ impl<
             + AddAssign
             + Copy
             + Clone
-            + Default
-            + TotalOrder,
+            + Default,
         M: LmModel<u32, P>,
     > Generation for LmSession<P, u32, M>
 {

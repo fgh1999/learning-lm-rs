@@ -2,11 +2,11 @@ use crate::{
     config::LlamaConfigJson,
     kvcache::KVCache,
     operators::{self as OP, cartesian_product2},
-    params::LLamaParams,
+    params::LlamaParams,
     tensor::{Tensor, TensorView},
 };
 use getset::Getters;
-use num_traits::{float::TotalOrder, Float, Num};
+use num_traits::{Float, Num};
 #[cfg(feature = "rayon")]
 use rayon::prelude::*;
 use safetensors::SafeTensors;
@@ -29,7 +29,7 @@ pub struct Llama<T: Num> {
     eps: f32,               // epsilon for RMS normalization
     rope_theta: f32,        // rope theta for rope initialization
     max_seq_len: usize,     // maximum sequence length
-    params: LLamaParams<T>, // trained weights of this model
+    params: LlamaParams<T>, // trained weights of this model
     bos_token_id: u32,      // start token id
     eos_token_id: u32,      // end token id
     #[getset(get = "pub")]
@@ -63,8 +63,7 @@ impl<
             + AddAssign
             + Copy
             + Clone
-            + Default
-            + TotalOrder,
+            + Default,
     > LmModel<u32, P> for Llama<P>
 {
     fn forward(&self, input: &Tensor<u32>, cache: &mut KVCache<u32, P>) -> Tensor<P> {
@@ -209,34 +208,43 @@ impl<
     }
 }
 
-impl Llama<f32> {
-    pub fn from_safetensors(model_dir: impl AsRef<Path>) -> Self {
-        let config = File::open(model_dir.as_ref().join("config.json")).unwrap();
-        let config: LlamaConfigJson = serde_json::from_reader(config).unwrap();
-        let model_file = std::fs::read(model_dir.as_ref().join("model.safetensors")).unwrap();
-        let safetensor = SafeTensors::deserialize(&model_file).unwrap();
-        let params = LLamaParams::from_safetensors(&safetensor, &config);
+macro_rules! impl_from_safetensors_for_Llama {
+    ($Param:ty) => {
+        impl Llama<$Param> {
+            pub fn from_safetensors(model_dir: impl AsRef<Path>) -> Self {
+                let config = File::open(model_dir.as_ref().join("config.json")).unwrap();
+                let config: LlamaConfigJson = serde_json::from_reader(config).unwrap();
+                let model_file =
+                    std::fs::read(model_dir.as_ref().join("model.safetensors")).unwrap();
+                let safetensor = SafeTensors::deserialize(&model_file).unwrap();
 
-        assert!(config.num_attention_heads % config.num_key_value_heads == 0);
-        Self {
-            vocab: config.vocab_size,
-            n_layers: config.num_hidden_layers,
-            n_q_h: config.num_attention_heads,
-            n_kv_h: config.num_key_value_heads,
-            d: config.hidden_size,
-            dqkv: config.hidden_size / config.num_attention_heads,
-            di: config.intermediate_size,
-            eps: config.rms_norm_eps,
-            rope_theta: config.rope_theta,
-            max_seq_len: config.max_position_embeddings,
-            params,
-            bos_token_id: config.bos_token_id,
-            eos_token_id: config.eos_token_id,
-            perf_info: Mutex::new(PerfInfo::default()),
+                assert!(config.num_attention_heads % config.num_key_value_heads == 0);
+                Self {
+                    vocab: config.vocab_size,
+                    n_layers: config.num_hidden_layers,
+                    n_q_h: config.num_attention_heads,
+                    n_kv_h: config.num_key_value_heads,
+                    d: config.hidden_size,
+                    dqkv: config.hidden_size / config.num_attention_heads,
+                    di: config.intermediate_size,
+                    eps: config.rms_norm_eps,
+                    rope_theta: config.rope_theta,
+                    max_seq_len: config.max_position_embeddings,
+                    params: LlamaParams::<$Param>::from_safetensors(&safetensor, &config),
+                    bos_token_id: config.bos_token_id,
+                    eos_token_id: config.eos_token_id,
+                    perf_info: Mutex::new(PerfInfo::default()),
+                }
+            }
         }
-    }
+    };
 }
+impl_from_safetensors_for_Llama!(f32);
+impl_from_safetensors_for_Llama!(f64);
+impl_from_safetensors_for_Llama!(half::f16);
+impl_from_safetensors_for_Llama!(half::bf16);
 
+#[allow(clippy::too_many_arguments)]
 fn self_attention<
     P: Float + std::iter::Sum + Sync + Send + MulAssign + DivAssign + AddAssign,
     T0: TensorView<P> + Sync,
@@ -326,6 +334,7 @@ fn self_attention<
     });
 }
 
+#[allow(clippy::too_many_arguments)]
 fn mlp<P: Float + std::iter::Sum + Sync + Send + MulAssign>(
     residual: &mut Tensor<P>,      // as input and output
     hidden_states: &mut Tensor<P>, // as buffer
@@ -388,7 +397,7 @@ pub fn test_load_safetensors_from_story_model() {
     use std::path::PathBuf;
     let project_dir = env!("CARGO_MANIFEST_DIR");
     let model_dir = PathBuf::from(project_dir).join("models").join("story");
-    let model = Llama::from_safetensors(model_dir);
+    let model = Llama::<f32>::from_safetensors(model_dir);
     assert_eq!(model.vocab, 2048);
     assert_eq!(model.n_layers, 2);
     assert_eq!(model.n_q_h, 8);
@@ -460,7 +469,7 @@ pub fn test_load_safetensors_from_chat_model() {
         return;
     }
 
-    let model = Llama::from_safetensors(model_dir);
+    let model = Llama::<f32>::from_safetensors(model_dir);
     assert_eq!(model.vocab, 32002);
     assert_eq!(model.n_layers, 10);
     assert_eq!(model.n_q_h, 12);

@@ -4,7 +4,7 @@ use std::{
 };
 
 use crate::tensor::{Tensor, TensorView, WritableTensorView};
-use num_traits::{float::TotalOrder, Float, Num};
+use num_traits::{Float, Num};
 #[cfg(feature = "rayon")]
 use rayon::prelude::*;
 
@@ -276,44 +276,56 @@ pub fn dot<P: Num + Copy + Clone + std::iter::Sum, T0: TensorView<P>, T1: Tensor
 // }
 
 // Samples an index from a tensor (treated as a probability vector)
-pub fn random_sample<P: Float + Copy + Clone + TotalOrder, T: TensorView<P>>(
+pub fn random_sample<P: Float + Copy + Clone, T: TensorView<P>>(
     x: &T,
     top_p: f32,
     top_k: u32,
     temperature: f32,
 ) -> u32 {
+    use std::cmp::Ordering;
     assert!(x.shape().last().cloned().unwrap() == x.size());
     if temperature <= 0. || top_k < 2 || top_p <= 0. {
         return x
             .data_iter()
             .enumerate()
-            .max_by(|(_, a), (_, b)| a.total_cmp(b))
+            .max_by(|(_, a), (_, b)| {
+                if a > b {
+                    Ordering::Greater
+                } else if a < b {
+                    Ordering::Less
+                } else {
+                    Ordering::Equal
+                }
+            })
             .unwrap()
             .0 as _;
     }
 
     #[derive(Clone, Copy, PartialEq, Debug)]
-    struct Probability<T: Num + Copy + Clone> {
+    struct Probability<T: Float + Copy + Clone> {
         val: T,
         tok: u32,
     }
-    impl<T: Num + Copy + Clone> Eq for Probability<T> {}
-    impl<T: Num + Copy + Clone + TotalOrder> PartialOrd for Probability<T> {
+    impl<T: Float + Copy + Clone> Eq for Probability<T> {}
+    impl<T: Float + Copy + Clone> PartialOrd for Probability<T> {
         #[inline]
         fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
             Some(self.cmp(other))
         }
     }
-    impl<T: Num + Copy + Clone + TotalOrder> Ord for Probability<T> {
+    impl<T: Float + Copy + Clone> Ord for Probability<T> {
         #[inline]
-        fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-            match self.val.total_cmp(&other.val) {
-                std::cmp::Ordering::Equal => self.tok.cmp(&other.tok),
-                ord => ord.reverse(),
+        fn cmp(&self, other: &Self) -> Ordering {
+            if self.val > other.val {
+                Ordering::Less
+            } else if self.val < other.val {
+                Ordering::Greater
+            } else {
+                Ordering::Equal
             }
         }
     }
-    impl<T: Num + Copy + Clone> From<(usize, &T)> for Probability<T> {
+    impl<T: Float + Copy + Clone> From<(usize, &T)> for Probability<T> {
         #[inline]
         fn from((i, &p): (usize, &T)) -> Self {
             Self {
