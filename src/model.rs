@@ -312,7 +312,11 @@ fn self_attention<
     }
     let hidden = hidden_states.slice(0, &[seq_len, n_kv_h, n_groups, dqkv]);
 
-    cartesian_product2(0..n_groups, 0..seq_len).for_each(|(g_idx, seq_idx)| {
+    let g_seq_indices = cartesian_product2(0..n_groups, 0..seq_len);
+    #[cfg(feature = "rayon")]
+    let g_seq_indices = g_seq_indices.collect::<Vec<_>>().into_par_iter();
+    g_seq_indices.for_each(|(g_idx, seq_idx)| {
+        // no parallelization on `tseq_idx` because of the data race on `hidden_vec`
         cartesian_product2(0..n_kv_h, 0..total_seq_len).for_each(|(kv_idx, tseq_idx)| {
             let v_vec = v.slice(
                 Tensor::<P>::index_to_offset(&[tseq_idx, kv_idx, 0], v.shape()),

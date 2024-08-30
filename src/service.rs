@@ -4,12 +4,12 @@ use log::info;
 use minijinja::Environment;
 use tokenizers::Tokenizer;
 
-use crate::session::Generation;
+use crate::session::TokenGeneration;
 
 pub type Identity = String;
 
 #[derive(Getters)]
-pub struct ChatService<'source, G: Generation> {
+pub struct ChatService<'source, G: TokenGeneration> {
     sessions: DashMap<Identity, G>,
     #[getset(get = "pub")]
     tokenizer: Tokenizer,
@@ -29,7 +29,7 @@ impl From<TemplateName> for &str {
     }
 }
 
-impl<'source, G: Generation> ChatService<'source, G> {
+impl<'source, G: TokenGeneration> ChatService<'source, G> {
     pub fn new(tokenizer: Tokenizer, jenv: Environment<'source>) -> Self {
         Self {
             sessions: DashMap::new(),

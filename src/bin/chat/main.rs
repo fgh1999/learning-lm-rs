@@ -7,7 +7,7 @@ use clap::Parser;
 use lm_infer::{
     model::Llama,
     service::{ChatService, TemplateName},
-    session::{Generation, LmSession},
+    session::{LmSession, TokenGeneration},
 };
 use minijinja::{context as jcontext, Environment as JinjaEnv};
 use std::sync::Arc;
@@ -67,10 +67,8 @@ fn main() {
         .jenv()
         .get_template(TemplateName::Chat.into())
         .unwrap();
-    let prompt = {
-        let prompt = chat_template
-            .render(jcontext!(add_generation_prompt => true, messages => chat_history, eos_token))
-            .unwrap();
+
+    fn compact_prompt(prompt: &str) -> String {
         prompt
             .chars()
             .fold((String::new(), ' '), |(mut s, last), c| {
@@ -82,18 +80,79 @@ fn main() {
                 }
             })
             .0
+    }
+    let prompt_from_history = |chat_history: &[ChatMessage], add_generation_prompt: bool| -> String {
+        let prompt = chat_template
+            .render(jcontext!(add_generation_prompt, messages => chat_history, eos_token))
+            .unwrap();
+        compact_prompt(&prompt)
     };
-    chat_svc.with_session_mut(&user_id, |sess| {
-        print!("PROMPT: {}", prompt);
-        let input_ids = {
-            let binding = chat_svc.tokenizer().encode(prompt.as_str(), true).unwrap();
-            binding.get_ids().to_owned()
-        };
-        let output_ids = sess.generate(&input_ids, 128, 0.55, 35, 0.65, Some(1.176));
-        let answer = chat_svc.tokenizer().decode(&output_ids, true).unwrap();
-        chat_history.push(ChatMessage::from_assistant(&answer));
-        println!("ANSWER: {}", answer);
-    });
+
+    let prompt = prompt_from_history(chat_history.as_slice(), true);
+    let answer = chat_svc
+        .with_session_mut(&user_id, |sess| {
+            print!("PROMPT: {}", prompt);
+            let input_ids = {
+                let binding = chat_svc.tokenizer().encode(prompt.as_str(), true).unwrap();
+                binding.get_ids().to_owned()
+            };
+            let output_ids = sess.generate(&input_ids, 128, 0.55, 35, 0.65, Some(1.176));
+            chat_svc.tokenizer().decode(&output_ids, true).unwrap()
+        })
+        .expect("Session not found");
+    chat_history.push(ChatMessage::from_assistant(&answer));
+    println!("ANSWER: {}\n", answer);
+
+    chat_history.push(ChatMessage::from_user("How many legs does a rabbit have?"));
+    let prompt = prompt_from_history(chat_history.as_slice(), true);
+    let answer = chat_svc
+        .with_session_mut(&user_id, |sess| {
+            print!("PROMPT: {}", prompt);
+            let input_ids = {
+                let binding = chat_svc.tokenizer().encode(prompt.as_str(), true).unwrap();
+                binding.get_ids().to_owned()
+            };
+            let output_ids = sess.generate(&input_ids, 128, 0.55, 35, 0.65, Some(1.176));
+            chat_svc.tokenizer().decode(&output_ids, true).unwrap()
+        })
+        .expect("Session not found");
+    chat_history.push(ChatMessage::from_assistant(&answer));
+    println!("ANSWER: {}\n", answer);
+
+    // revert the question
+    chat_history.pop(); // pop the answer
+    chat_history.pop(); // pop the question
+    let prompt_after_revert = prompt_from_history(chat_history.as_slice(), false);
+    println!("correct PROMPT after [revertion]: {}", prompt_after_revert);
+    // let input_ids = {
+    //     let binding = chat_svc.tokenizer().encode(prompt_after_revert.as_str(), true).unwrap();
+    //     binding.get_ids().to_owned()
+    // };
+    chat_svc
+        .with_session_mut(&user_id, |sess| {
+            let token_ids = sess.revert_to_before(1).collect::<Vec<_>>();
+            let tokens = chat_svc.tokenizer().decode(&token_ids, false).unwrap();
+            println!("true PROMPT after [revertion]: {}", tokens);
+        })
+        .expect("Session not found");
+    println!("[Reverted] to the previous question.\n");
+    
+    // generate again with another question
+    chat_history.push(ChatMessage::from_user("What is the color of the sky?"));
+    let prompt = prompt_from_history(chat_history.as_slice(), true);
+    let answer = chat_svc
+        .with_session_mut(&user_id, |sess| {
+            print!("PROMPT: {}", prompt);
+            let input_ids = {
+                let binding = chat_svc.tokenizer().encode(prompt.as_str(), true).unwrap();
+                binding.get_ids().to_owned()
+            };
+            let output_ids = sess.generate(&input_ids, 128, 0.55, 35, 0.65, Some(1.176));
+            chat_svc.tokenizer().decode(&output_ids, true).unwrap()
+        })
+        .expect("Session not found");
+    chat_history.push(ChatMessage::from_assistant(&answer));
+    println!("ANSWER: {}\n", answer);
 
     #[cfg(feature = "perf")]
     chat_svc.with_session(&user_id, |sess| {

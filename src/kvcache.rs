@@ -58,6 +58,14 @@ impl<TID: Num + Copy, P: Num + Default + Copy> KVCache<TID, P> {
         Ok(())
     }
 
+    pub fn pop(&mut self) -> Option<TID> {
+        self.blocks.pop().map(|block| block.token_id)
+    }
+
+    pub fn truncate(&mut self, len: usize) {
+        self.blocks.truncate(len);
+    }
+
     pub fn k_cache_within(
         &self,
         layer_idx: usize,
@@ -103,9 +111,9 @@ impl<TID: Num + Copy, P: Num + Default + Copy> KVCache<TID, P> {
     }
 }
 
-#[derive(Getters, MutGetters)]
+#[derive(Getters, MutGetters, CopyGetters)]
 struct KvCacheBlock<TID: Num + Copy, P: Num + Default + Copy> {
-    #[getset(get = "pub")]
+    #[getset(get_copy = "pub")]
     token_id: TID,
     #[getset(get = "pub", get_mut = "pub")]
     k: Vec<Tensor<P>>, // [n_kv_head * dqkv] * layers

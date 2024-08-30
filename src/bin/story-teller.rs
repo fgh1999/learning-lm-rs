@@ -1,6 +1,6 @@
 use lm_infer::{
     model::Llama,
-    session::{Generation, LmSession},
+    session::{LmSession, TokenGeneration},
 };
 use std::path::PathBuf;
 use tokenizers::Tokenizer;

@@ -12,7 +12,7 @@ pub struct LmSession<P: Float + Default + Copy, TID: Num + Copy, M: LmModel<TID,
     kv_cache: KVCache<TID, P>,
     model: Arc<M>,
     #[getset(get = "pub")]
-    perf_info: Vec<PerfTimeRecord>,
+    records: Vec<PerfTimeRecord>,
 }
 
 #[derive(Default, Debug)]
@@ -49,24 +49,24 @@ impl<P: Float + Default + Copy, TID: Num + Copy, M: LmModel<TID, P>> LmSession<P
         LmSession {
             kv_cache: KVCache::new(model.layer_num(), model.max_seq_len(), model.kv_dim()),
             model,
-            perf_info: Vec::new(),
+            records: Vec::new(),
         }
     }
 
     pub fn avg_performance(&self) -> (Option<f64>, Option<f64>) {
-        if self.perf_info.is_empty() {
+        if self.records.is_empty() {
             return (None, None);
         }
 
         let avg_prompt_token_per_sec = self
-            .perf_info
+            .records
             .iter()
             .map(|record| record.prompt_prossing_performance())
             .sum::<f64>()
-            / self.perf_info.len() as f64;
+            / self.records.len() as f64;
 
         let token_per_sec_after_prompt = self
-            .perf_info
+            .records
             .iter()
             .filter_map(|record| record.generation_performance())
             .collect::<Vec<_>>();
@@ -97,7 +97,7 @@ impl<P: Float + Default + Copy, TID: Num + Copy, M: LmModel<TID, P>> LmSession<P
     }
 }
 
-pub trait Generation {
+pub trait TokenGeneration {
     fn generate(
         &mut self,
         token_ids: &[u32],
@@ -107,12 +107,15 @@ pub trait Generation {
         temperature: f32,
         repetition_penalty: Option<f32>,
     ) -> Vec<u32>;
-}
 
+    /// Reverts the session to the state before the ith generation.
+    /// Returns an iterator of the token ids after this revertion.
+    fn revert_to_before(&mut self, ith: usize) -> impl Iterator<Item = u32>;
+}
 impl<
         P: Float + std::iter::Sum + Sync + Send + MulAssign + DivAssign + AddAssign + Copy + Default,
         M: LmModel<u32, P>,
-    > Generation for LmSession<P, u32, M>
+    > TokenGeneration for LmSession<P, u32, M>
 {
     fn generate(
         &mut self,
@@ -141,6 +144,8 @@ impl<
 
         #[cfg(feature = "perf")]
         let start = std::time::Instant::now();
+        #[allow(unused_variables)]
+        let first_iter_duration = Duration::default();
 
         result.push({
             let prompt_token_ids = if !token_ids.is_empty() {
@@ -158,17 +163,29 @@ impl<
             result.push(generate_next!(vec![*result.last().unwrap()]));
         }
 
+        #[allow(unused_variables)]
+        let total_generation_duration = Duration::default();
         #[cfg(feature = "perf")]
-        {
-            let record = PerfTimeRecord {
-                total_generation_duration: start.elapsed(),
-                prompt_duration: first_iter_duration,
-                prompt_token_num: token_ids.len(),
-                output_token_num: result.len(),
-            };
-            self.perf_info.push(record);
-        }
+        let total_generation_duration = start.elapsed();
+        let record = PerfTimeRecord {
+            total_generation_duration,
+            prompt_duration: first_iter_duration,
+            prompt_token_num: token_ids.len(),
+            output_token_num: result.len(),
+        };
+        self.records.push(record);
 
         result
+    }
+
+    fn revert_to_before(&mut self, ith: usize) -> impl Iterator<Item = u32> {
+        self.records.truncate(ith);
+        self.kv_cache.truncate(
+            self.records
+                .last()
+                .map(|record| record.prompt_token_num + record.output_token_num)
+                .unwrap_or(0),
+        );
+        self.kv_cache.token_ids()
     }
 }
