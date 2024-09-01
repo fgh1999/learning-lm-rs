@@ -4,53 +4,37 @@ use log::info;
 
 use crate::session::TokenGeneration;
 
-pub type Identity = String;
-
 #[derive(Getters)]
 pub struct ChatService<G: TokenGeneration> {
-    sessions: DashMap<Identity, G>,
+    sessions: DashMap<String, G>,
 }
 
-#[derive(Debug)]
-pub enum TemplateName {
-    Chat,
-}
-impl From<TemplateName> for &str {
-    fn from(val: TemplateName) -> Self {
-        match val {
-            TemplateName::Chat => "chat",
-        }
-    }
-}
-
-impl<'source, G: TokenGeneration> ChatService<G> {
-    pub fn new() -> Self {
-        Self {
+impl<G: TokenGeneration> Default for ChatService<G> {
+    fn default() -> Self {
+        ChatService {
             sessions: DashMap::new(),
         }
     }
+}
 
-    pub fn create_session(&self, identity: Identity, generation: G) {
+impl<G: TokenGeneration> ChatService<G> {
+    pub fn create_session(&self, identity: String, generation: G) {
         let identity_clone = identity.clone();
         self.sessions.insert(identity, generation);
         info!("Session created: {}", identity_clone);
     }
 
-    pub fn with_session<T>(&self, identity: &Identity, f: impl FnOnce(&G) -> T) -> Option<T> {
+    pub fn with_session<T>(&self, identity: &str, f: impl FnOnce(&G) -> T) -> Option<T> {
         self.sessions.get(identity).map(|sess| f(sess.value()))
     }
 
-    pub fn with_session_mut<T>(
-        &self,
-        identity: &Identity,
-        f: impl FnOnce(&mut G) -> T,
-    ) -> Option<T> {
+    pub fn with_session_mut<T>(&self, identity: &str, f: impl FnOnce(&mut G) -> T) -> Option<T> {
         self.sessions
             .get_mut(identity)
             .map(|mut session| f(session.value_mut()))
     }
 
-    pub fn remove_session(&self, identity: &Identity) -> Option<G> {
+    pub fn remove_session(&self, identity: &str) -> Option<G> {
         let removed = self.sessions.remove(identity).map(|(_, sess)| sess);
         info!("Session removed: {}", identity);
         removed

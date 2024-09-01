@@ -14,4 +14,5 @@ members = [
     "story-teller",
     "chat/chat-revert",
     "chat/chat-server",
+    "chat/chat-cli",
 ]

@@ -5,7 +5,7 @@ use message::ChatMessage;
 
 use lm_infer_core::{
     model::Llama,
-    service::{ChatService, TemplateName},
+    service::ChatService,
     session::{LmSession, TokenGeneration},
 };
 use minijinja::{context as jcontext, Environment as JinjaEnv};
@@ -20,6 +20,18 @@ struct Args {
     /// The path to the model directory
     #[arg(short, long)]
     model_dir: String,
+}
+
+#[derive(Debug)]
+pub enum TemplateName {
+    Chat,
+}
+impl From<TemplateName> for &str {
+    fn from(val: TemplateName) -> Self {
+        match val {
+            TemplateName::Chat => "chat",
+        }
+    }
 }
 
 fn main() {
@@ -51,7 +63,7 @@ fn main() {
     jenv.add_template(TemplateName::Chat.into(), &chat_template)
         .unwrap();
     let chat_svc: ChatService<LmSession<ModelParamType, u32, Llama<ModelParamType>>> =
-        ChatService::new();
+        ChatService::default();
     info!("Chat service initialized");
 
     let user_id = "user0".to_string();

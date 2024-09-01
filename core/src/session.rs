@@ -109,8 +109,10 @@ pub trait TokenGeneration {
     ) -> Vec<u32>;
 
     /// Reverts the session to the state before the ith generation.
-    /// Returns an iterator of the token ids after this revertion.
+    /// Returns an iterator of all the token ids after this revertion.
     fn revert_to_before(&mut self, ith: usize) -> impl Iterator<Item = u32>;
+
+    fn generation_records(&self) -> &[PerfTimeRecord];
 }
 impl<
         P: Float + std::iter::Sum + Sync + Send + MulAssign + DivAssign + AddAssign + Copy + Default,
@@ -187,5 +189,9 @@ impl<
                 .unwrap_or(0),
         );
         self.kv_cache.token_ids()
+    }
+
+    fn generation_records(&self) -> &[PerfTimeRecord] {
+        &self.records
     }
 }

@@ -400,7 +400,8 @@ pub fn test_load_safetensors_from_story_model() {
     use crate::tensor::float_eq;
     use std::path::PathBuf;
     let project_dir = env!("CARGO_MANIFEST_DIR");
-    let model_dir = PathBuf::from(project_dir).join("models").join("story");
+    let model_dir = PathBuf::from(project_dir).join("../models").join("story");
+    println!("{:?}", model_dir);
     let model = Llama::<f32>::from_safetensors(model_dir);
     assert_eq!(model.vocab, 2048);
     assert_eq!(model.n_layers, 2);
@@ -468,8 +469,12 @@ pub fn test_load_safetensors_from_chat_model() {
     use crate::tensor::float_eq;
     use std::path::PathBuf;
     let project_dir = env!("CARGO_MANIFEST_DIR");
-    let model_dir = PathBuf::from(project_dir).join("models").join("chat");
+    let model_dir = PathBuf::from(project_dir).join("../models").join("chat");
     if !model_dir.exists() {
+        use std::io::Write;
+        std::io::stderr()
+            .write(b"Please download the chat model first.\n")
+            .unwrap();
         return;
     }
 

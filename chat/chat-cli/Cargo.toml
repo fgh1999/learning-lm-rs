@@ -1,5 +1,5 @@
 [package]
-name = "chat-server"
+name = "chat-cli"
 version = "0.1.0"
 edition = "2021"
 
@@ -7,12 +7,16 @@ edition = "2021"
 lm-infer-core = { path = "../../core" }
 tokenizers = { workspace = true }
 clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+minijinja = "2.1.2"
 log = { workspace = true }
 env_logger = { workspace = true }
 half = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-rocket = { version = "0.5.1", features = ["http2", "json", "serde_json"] }
+reqwest = "0.12.7"
+tokio = { version = "1", features = ["full"] }
+anyhow = "1.0.86"
+
 
 [features]
 default = ["perf"]
