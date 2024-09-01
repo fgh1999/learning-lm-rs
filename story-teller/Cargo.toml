@@ -1,0 +1,14 @@
+[package]
+name = "story-teller"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+lm-infer-core = { path = "../core" }
+tokenizers = { workspace = true }
+clap = { workspace = true }
+
+[features]
+default = ["perf"]
+rayon = ["lm-infer-core/rayon"]
+perf = ["lm-infer-core/perf"]

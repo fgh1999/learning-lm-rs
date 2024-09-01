@@ -1,31 +1,17 @@
-[package]
-name = "lm-infer"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-safetensors = "0.4.3"
-tokenizers = "0.19.1"
-rand = "0.8"
-getset = "0.1.2"
-num-traits = "0.2.19"
-rayon = { version = "1.10.0", optional = true }
-half = { version = "2.4.1", features = ["std", "num-traits", "serde"] }
-minijinja = "2.1.2"
+[workspace.dependencies]
 log = "0.4.22"
 env_logger = "0.11.5"
-dashmap = "6.0.1"
 clap = { version = "4.5.16", features = ["derive"] }
+tokenizers = "0.19.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+half = { version = "2.4.1", features = ["std", "num-traits", "serde"] }
 
-[features]
-default = ["perf"]
-rayon = ["dep:rayon"]
-perf = []
-
-[[bin]]
-name = "story-teller"
-
-[[bin]]
-name = "chat"
+[workspace]
+resolver = "2"
+members = [
+    "core",
+    "story-teller",
+    "chat/chat-revert",
+    "chat/chat-server",
+]
