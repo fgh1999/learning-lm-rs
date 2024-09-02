@@ -1,8 +1,9 @@
+use getset::Getters;
 use serde::Serialize;
 
 #[allow(unused)]
-#[derive(Debug)]
-enum ChatRole {
+#[derive(Debug, PartialEq, Eq)]
+pub enum ChatRole {
     System,
     User,
     Assistant,
@@ -20,9 +21,11 @@ impl Serialize for ChatRole {
         serializer.serialize_str(role_str)
     }
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Getters)]
 pub struct ChatMessage {
+    #[getset(get = "pub")]
     role: ChatRole,
+    #[getset(get = "pub")]
     content: String,
 }
 

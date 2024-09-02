@@ -1,11 +1,10 @@
 mod chat_client;
-mod message;
-
-use std::io::Write;
+mod console;
+use console::Console;
 
 use clap::Parser;
+use lm_infer_core::message::{ChatMessage, ChatRole};
 use log::info;
-use message::ChatMessage;
 
 use anyhow::Result;
 use minijinja::{context as jcontext, Environment as JinjaEnv};
@@ -99,29 +98,58 @@ async fn main() -> Result<()> {
     client.create_session().await?;
     info!("Session created");
 
-    // until user types "exit"
     loop {
-        print!("You: ");
-        std::io::stdout().flush().unwrap();
+        let input = Console::from(&chat_history).user_input();
+        // command mode
+        if input.trim().to_lowercase().starts_with(':') {
+            let input = input.trim().to_lowercase();
+            let input = input[1..].trim();
+            match input {
+                // loop until user types "exit" command
+                "exit" => {
+                    return Ok(());
+                }
+                "history" => Console::from(&chat_history).print_all_chat_history(),
+                input if input.starts_with("revert_to") => {
+                    let Ok(target_ith) = input["revert_to".len()..].trim().parse::<usize>() else {
+                        Console::system_println("Invalid ith: should be of u64");
+                        continue;
+                    };
+                    let cur_conversation_num = chat_history
+                        .iter()
+                        .filter(|msg| msg.role() == &ChatRole::Assistant)
+                        .count();
+                    if target_ith >= cur_conversation_num {
+                        Console::system_println("Invalid ith: out of range");
+                        continue;
+                    }
 
-        let mut input = String::new();
-        std::io::stdin().read_line(&mut input).unwrap();
-        let input = input.trim();
-        if input.to_lowercase() == "exit" {
-            break;
+                    let _ = client.revert(target_ith).await?;
+                    chat_history.truncate(target_ith * 2 + 1);
+                    Console::system_println(&format!(
+                        "Reverted to the state before {}th generation",
+                        target_ith
+                    ));
+                }
+                _ => {
+                    Console::system_println(&format!("Unknown command: {}", input));
+                }
+            }
+            continue;
         }
 
-        chat_history.push(ChatMessage::from_user(input));
-        let prompt = prompt_from_history(chat_history.as_slice(), true);
+        // chat mode
+        chat_history.push(ChatMessage::from_user(&input));
         let token_ids = {
+            let prompt = prompt_from_history(chat_history.as_slice(), true);
             let binding = tokenizer.encode(prompt.as_str(), true).unwrap();
             binding.get_ids().to_owned()
         };
-        let output_ids = client.generate(token_ids).await?;
-        let answer = tokenizer.decode(&output_ids, true).unwrap();
+        let answer = {
+            let output_ids = client.generate(token_ids).await?;
+            tokenizer.decode(&output_ids, true).unwrap()
+        };
         chat_history.push(ChatMessage::from_assistant(&answer));
-        println!("Assistant: {}", answer);
+        Console::assistant_println(&answer);
     }
-
-    Ok(())
 }

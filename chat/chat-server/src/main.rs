@@ -15,7 +15,7 @@ use rocket::{
     State,
 };
 
-type ModelParamType = half::bf16;
+type ModelParamType = f32;
 
 #[derive(Parser, Debug)]
 #[command(version)]

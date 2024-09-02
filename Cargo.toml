@@ -6,6 +6,7 @@ tokenizers = "0.19.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 half = { version = "2.4.1", features = ["std", "num-traits", "serde"] }
+getset = "0.1.2"
 
 [workspace]
 resolver = "2"

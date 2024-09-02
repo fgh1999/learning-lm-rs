@@ -1,7 +1,6 @@
-mod message;
 use clap::Parser;
+use lm_infer_core::message::ChatMessage;
 use log::info;
-use message::ChatMessage;
 
 use lm_infer_core::{
     model::Llama,
@@ -70,7 +69,7 @@ fn main() {
     chat_svc.create_session(user_id.clone(), LmSession::new(llama));
     let mut chat_history: Vec<ChatMessage> = vec![
         ChatMessage::from_system("You are an assistant."),
-        ChatMessage::from_user("Is apple red?"),
+        ChatMessage::from_user("Are apples red?"),
     ];
 
     let chat_template = jenv.get_template(TemplateName::Chat.into()).unwrap();

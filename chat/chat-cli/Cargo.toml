@@ -16,7 +16,7 @@ half = { workspace = true }
 reqwest = "0.12.7"
 tokio = { version = "1", features = ["full"] }
 anyhow = "1.0.86"
-
+getset = { workspace = true }
 
 [features]
 default = ["perf"]
