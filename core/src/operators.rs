@@ -225,14 +225,8 @@ pub fn matmul_transb<
     let mut c_data: Vec<(usize, &mut P)> = unsafe { c.data_iter_mut() }.enumerate().collect();
     c_data.par_iter_mut().for_each(|(offset, c_val)| {
         let idx = Tensor::<P>::offset_to_index(*offset, &c_shape);
-        let a_vec = a.slice(
-            Tensor::<P>::index_to_offset(&[idx[0], 0], a.shape()),
-            &vec_shape,
-        );
-        let b_vec = b.slice(
-            Tensor::<P>::index_to_offset(&[idx[1], 0], b.shape()),
-            &vec_shape,
-        );
+        let a_vec = a.slice(a.to_offset(&[idx[0], 0]), &vec_shape);
+        let b_vec = b.slice(b.to_offset(&[idx[1], 0]), &vec_shape);
         let prod = dot(&a_vec, &b_vec);
         **c_val = alpha * prod + beta * **c_val;
     });

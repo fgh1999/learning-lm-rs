@@ -283,20 +283,11 @@ fn self_attention<
         let att_idx_iter = att_indices.iter();
 
         att_idx_iter.for_each(|&(seq_idx, tseq_idx)| {
-            let q_vec = q.slice(
-                Tensor::<P>::index_to_offset(&[seq_idx, kv_idx, g_idx, 0], q.shape()),
-                &[dqkv],
-            );
-            let k_vec = k.slice(
-                Tensor::<P>::index_to_offset(&[tseq_idx, kv_idx, 0], k.shape()),
-                &[dqkv],
-            );
+            let q_vec = q.slice(q.to_offset(&[seq_idx, kv_idx, g_idx, 0]), &[dqkv]);
+            let k_vec = k.slice(k.to_offset(&[tseq_idx, kv_idx, 0]), &[dqkv]);
             let att_score = OP::dot(&q_vec, &k_vec) / dqkv_root;
             let mut a = att_scores.slice(
-                Tensor::<P>::index_to_offset(
-                    &[kv_idx, g_idx, seq_idx, tseq_idx],
-                    att_scores.shape(),
-                ),
+                att_scores.to_offset(&[kv_idx, g_idx, seq_idx, tseq_idx]),
                 &[1],
             );
             unsafe {
@@ -318,15 +309,10 @@ fn self_attention<
     g_seq_indices.for_each(|(g_idx, seq_idx)| {
         // no parallelization on `tseq_idx` because of the data race on `hidden_vec`
         cartesian_product2(0..n_kv_h, 0..total_seq_len).for_each(|(kv_idx, tseq_idx)| {
-            let v_vec = v.slice(
-                Tensor::<P>::index_to_offset(&[tseq_idx, kv_idx, 0], v.shape()),
-                &[dqkv],
-            );
+            let v_vec = v.slice(v.to_offset(&[tseq_idx, kv_idx, 0]), &[dqkv]);
             let att_score = att_scores.data_at(&[kv_idx, g_idx, seq_idx, tseq_idx]);
-            let mut hidden_vec = hidden.slice(
-                Tensor::<P>::index_to_offset(&[seq_idx, kv_idx, g_idx, 0], hidden.shape()),
-                &[dqkv],
-            );
+            let mut hidden_vec =
+                hidden.slice(hidden.to_offset(&[seq_idx, kv_idx, g_idx, 0]), &[dqkv]);
             unsafe {
                 hidden_vec
                     .data_mut()
