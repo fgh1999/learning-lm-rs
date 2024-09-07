@@ -6,7 +6,7 @@ use num_traits::Num;
 use crate::tensor::{Tensor, TensorView, WritableTensorView};
 
 #[derive(CopyGetters)]
-pub struct KVCache<TID: Num + Copy, P: Num + Default + Copy> {
+pub struct KVCache<TID: Copy, P: Num + Default + Copy> {
     blocks: Vec<KvCacheBlock<TID, P>>,
     #[getset(get_copy = "pub")]
     layer_num: usize,
@@ -16,7 +16,7 @@ pub struct KVCache<TID: Num + Copy, P: Num + Default + Copy> {
     max_seq_len: usize,
 }
 
-impl<TID: Num + Copy, P: Num + Default + Copy> KVCache<TID, P> {
+impl<TID: Copy, P: Num + Default + Copy> KVCache<TID, P> {
     pub fn new(layer_num: usize, max_seq_len: usize, dim: usize) -> Self {
         KVCache {
             blocks: Vec::new(),
@@ -112,7 +112,7 @@ impl<TID: Num + Copy, P: Num + Default + Copy> KVCache<TID, P> {
 }
 
 #[derive(Getters, MutGetters, CopyGetters)]
-struct KvCacheBlock<TID: Num + Copy, P: Num + Default + Copy> {
+struct KvCacheBlock<TID: Copy, P: Num + Default + Copy> {
     #[getset(get_copy = "pub")]
     token_id: TID,
     #[getset(get = "pub", get_mut = "pub")]
@@ -121,7 +121,7 @@ struct KvCacheBlock<TID: Num + Copy, P: Num + Default + Copy> {
     v: Vec<Tensor<P>>, // [n_kv_head * dqkv] * layers
 }
 
-impl<T: Num + Copy, P: Num + Default + Copy> KvCacheBlock<T, P> {
+impl<T: Copy, P: Num + Default + Copy> KvCacheBlock<T, P> {
     pub fn new(token_id: T, layer_num: usize, dim: usize) -> Self {
         KvCacheBlock {
             token_id,
@@ -137,7 +137,7 @@ enum CacheTarget {
     V,
 }
 #[derive(Getters, CopyGetters)]
-pub struct CachedTensor<'a, T: Num + Copy, P: Num + Default + Copy> {
+pub struct CachedTensor<'a, T: Copy, P: Num + Default + Copy> {
     blocks: &'a [KvCacheBlock<T, P>], // [sliced_seq_len, union{[n_kv_head * dqkv] * layers}]
     target: CacheTarget,
     length: usize,
@@ -148,9 +148,7 @@ pub struct CachedTensor<'a, T: Num + Copy, P: Num + Default + Copy> {
     layer_idx: usize,
 }
 
-unsafe impl<'a, T: Num + Copy, P: Num + Default + Copy> WritableTensorView<P>
-    for CachedTensor<'a, T, P>
-{
+unsafe impl<'a, T: Copy, P: Num + Default + Copy> WritableTensorView<P> for CachedTensor<'a, T, P> {
     unsafe fn with_data_mut_at(&mut self, idx: &[usize], op: impl FnOnce(&P) -> P) -> P {
         let (target, offset) = self.to_target(idx);
         let target = target as *const Tensor<P> as *mut Tensor<P>;
@@ -165,7 +163,7 @@ unsafe impl<'a, T: Num + Copy, P: Num + Default + Copy> WritableTensorView<P>
     }
 }
 
-impl<'a, T: Num + Copy, P: Num + Default + Copy> CachedTensor<'a, T, P> {
+impl<'a, T: Copy, P: Num + Default + Copy> CachedTensor<'a, T, P> {
     pub fn reshape(&mut self, shape: &[usize]) -> &mut Self {
         assert_eq!(shape.iter().product::<usize>(), self.length);
         self.shape = shape.to_vec();
@@ -187,7 +185,7 @@ impl<'a, T: Num + Copy, P: Num + Default + Copy> CachedTensor<'a, T, P> {
     }
 }
 
-impl<'a, T: Num + Copy, P: Num + Default + Copy> TensorView<P> for CachedTensor<'a, T, P> {
+impl<'a, T: Copy, P: Num + Default + Copy> TensorView<P> for CachedTensor<'a, T, P> {
     fn data_at<'b>(&'b self, idx: &[usize]) -> &'b P {
         let (target, offset) = self.to_target(idx);
         target.data_at(&[offset])

@@ -5,14 +5,13 @@ edition = "2021"
 
 [dependencies]
 lm-infer-core = { path = "../../core" }
-tokenizers = { workspace = true }
 clap = { workspace = true }
 log = { workspace = true }
 env_logger = { workspace = true }
 half = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-rocket = { version = "0.5.1", features = ["http2", "json", "serde_json"] }
+rocket = "0.5.1"
 
 [features]
 default = ["perf"]

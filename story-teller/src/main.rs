@@ -1,9 +1,8 @@
+use clap::Parser;
 use lm_infer_core::{
     model::Llama,
     session::{LmSession, TokenGeneration},
 };
-// use std::path::PathBuf;
-use clap::Parser;
 use tokenizers::Tokenizer;
 
 #[derive(Parser, Debug)]
@@ -15,8 +14,6 @@ struct Args {
 }
 
 fn main() {
-    // let project_dir = env!("CARGO_MANIFEST_DIR");
-    // let model_dir = PathBuf::from(project_dir).join("models").join("story");
     let args = Args::parse();
     let model_dir = std::env::current_dir().unwrap().join(args.model_dir);
     assert!(

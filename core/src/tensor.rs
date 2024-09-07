@@ -7,7 +7,7 @@ pub struct Tensor<T: Num> {
     data: Arc<Box<[T]>>,
     #[getset(get = "pub")]
     shape: Vec<usize>,
-    offset: usize,
+    storage_offset: usize,
     length: usize,
 }
 
@@ -63,7 +63,7 @@ impl<T: Num> TensorView<T> for Tensor<T> {
         Tensor {
             data: self.data.clone(),
             shape: shape.to_owned(),
-            offset: self.offset + start,
+            storage_offset: self.storage_offset + start,
             length,
         }
     }
@@ -98,7 +98,7 @@ unsafe impl<T: Num> WritableTensorView<T> for Tensor<T> {
     unsafe fn with_data_mut_at(&mut self, idx: &[usize], op: impl FnOnce(&T) -> T) -> T {
         let offset = self.to_offset(idx);
         unsafe {
-            let ptr = self.data.as_ptr().add(self.offset + offset) as *mut T;
+            let ptr = self.data.as_ptr().add(self.storage_offset + offset) as *mut T;
             let prev_val = ptr.read();
             ptr.write(op(&prev_val));
             prev_val
@@ -118,20 +118,20 @@ impl<T: Num> Tensor<T> {
         Tensor {
             data: Arc::new(data.into_boxed_slice()),
             shape: shape.to_vec(),
-            offset: 0,
+            storage_offset: 0,
             length,
         }
     }
 
     pub fn data(&self) -> &[T] {
-        &self.data[self.offset..][..self.length]
+        &self.data[self.storage_offset..][..self.length]
     }
 
     /// # Safety
     ///
     /// Writing to a tensor is unsafe because it can not guarantee that the tensor is not shared.
     pub unsafe fn data_mut(&mut self) -> &mut [T] {
-        let ptr = self.data.as_ptr().add(self.offset) as *mut T;
+        let ptr = self.data.as_ptr().add(self.storage_offset) as *mut T;
         slice::from_raw_parts_mut(ptr, self.length)
     }
 
@@ -171,8 +171,8 @@ impl<T: Num + Debug> Tensor<T> {
     #[allow(unused)]
     pub fn print(&self) {
         println!(
-            "shape: {:?}, offset: {}, length: {}",
-            self.shape, self.offset, self.length
+            "shape: {:?}, storage_offset: {}, length: {}",
+            self.shape, self.storage_offset, self.length
         );
         let dim = self.shape()[self.shape().len() - 1];
         let batch = self.length / dim;
