@@ -132,7 +132,7 @@ impl<
         assert!(repetition_penalty.map(|r| r > 0.).unwrap_or(true));
         let mut result = Vec::<u32>::new();
 
-        macro_rules! generate_next {
+        macro_rules! generate_next_token_id {
             ($prompt_token_ids:expr) => {{
                 let token_ids_len = $prompt_token_ids.len();
                 let token_tensor = Tensor::<u32>::new($prompt_token_ids, &[1, token_ids_len]);
@@ -155,14 +155,14 @@ impl<
             } else {
                 vec![self.model.bos_token_id()]
             };
-            generate_next!(prompt_token_ids)
+            generate_next_token_id!(prompt_token_ids)
         });
 
         #[cfg(feature = "perf")]
         let first_iter_duration = start.elapsed();
 
         while result.len() < max_len && result.last() != Some(&self.model.eos_token_id()) {
-            result.push(generate_next!(vec![*result.last().unwrap()]));
+            result.push(generate_next_token_id!(vec![*result.last().unwrap()]));
         }
 
         #[allow(unused_variables)]

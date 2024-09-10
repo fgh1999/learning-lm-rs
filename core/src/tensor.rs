@@ -18,7 +18,9 @@ impl<T: Num + Copy + Default> Tensor<T> {
 }
 
 pub trait TensorView<T> {
-    fn data_at<'a>(&'a self, idx: &[usize]) -> &'a T;
+    /// Returns the reference to the data at a given index.
+    fn data_at(&self, idx: &[usize]) -> &T;
+    /// Returns an iterator over the data.
     fn data_iter<'a>(&'a self) -> impl Iterator<Item = &'a T>
     where
         T: 'a;
@@ -48,7 +50,7 @@ pub trait TensorView<T> {
 }
 
 impl<T: Num> TensorView<T> for Tensor<T> {
-    fn data_at<'a>(&'a self, idx: &[usize]) -> &'a T {
+    fn data_at(&self, idx: &[usize]) -> &T {
         &self.data()[self.to_offset(idx)]
     }
     fn data_iter<'a>(&'a self) -> impl Iterator<Item = &'a T>
@@ -58,7 +60,7 @@ impl<T: Num> TensorView<T> for Tensor<T> {
         self.data().iter()
     }
     fn slice(&self, start: usize, shape: &[usize]) -> Self {
-        let length: usize = shape.iter().product();
+        let length = shape.iter().product();
         assert!(length <= self.length && start <= self.length - length);
         Tensor {
             data: self.data.clone(),
@@ -87,6 +89,8 @@ pub unsafe trait WritableTensorView<T>: TensorView<T> {
     /// Writing to a tensor view is unsafe because it can not guarantee that the tensor is not shared.
     unsafe fn with_data_mut_at(&mut self, idx: &[usize], op: impl FnOnce(&T) -> T) -> T;
 
+    /// Returns a mutable iterator over the data.
+    ///
     /// # Safety
     ///
     /// Writing to a tensor view is unsafe because it can not guarantee that the tensor is not shared.

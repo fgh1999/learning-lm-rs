@@ -105,8 +105,9 @@ async fn main() -> Result<()> {
             let input = input.trim().to_lowercase();
             let input = input[1..].trim();
             match input {
-                // loop until user types "exit" command
+                // loops until user types "exit" command
                 "exit" => {
+                    client.remove_session().await?;
                     return Ok(());
                 }
                 "history" => Console::from(&chat_history).print_all_chat_history(),
@@ -131,6 +132,7 @@ async fn main() -> Result<()> {
                         target_ith
                     ));
                 }
+                // TODO: `help` cmd
                 _ => {
                     Console::system_println(&format!("Unknown command: {}", input));
                 }

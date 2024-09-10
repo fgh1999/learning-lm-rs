@@ -1,4 +1,3 @@
-use log::info;
 use reqwest::Client;
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
@@ -67,15 +66,5 @@ impl EndpointClient {
             .bytes()
             .await?;
         Ok(serde_json::from_slice(&reverted_token_ids).unwrap())
-    }
-}
-
-impl Drop for EndpointClient {
-    fn drop(&mut self) {
-        let _ = self.remove_session();
-        info!(
-            "EndpointClient dropped => removing session: {}",
-            self.sess_id
-        );
     }
 }

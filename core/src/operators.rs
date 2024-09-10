@@ -74,7 +74,7 @@ pub fn masked_softmax<P: Float + std::iter::Sum + DivAssign>(y: &mut Tensor<P>) 
 
             let max = unmasked_data
                 .iter()
-                .fold(unmasked_data.first().cloned().unwrap(), |a, &b| a.max(b));
+                .fold(unmasked_data.first().cloned().unwrap(), |a, b| b.max(a));
 
             unmasked_data.iter_mut().for_each(|j| *j = (*j - max).exp());
             let sum = unmasked_data.iter().cloned().sum::<P>();
@@ -157,7 +157,11 @@ pub fn repetition_penalty<P: Float>(
     }
 }
 
-fn check_matmul_shape<P: Num, T0: TensorView<P>, T1: TensorView<P>, T2: TensorView<P>>(
+fn check_matmul_shape<
+    T0: TensorView<impl Num>,
+    T1: TensorView<impl Num>,
+    T2: TensorView<impl Num>,
+>(
     c: &T0,
     a: &T1,
     b: &T2,
@@ -243,7 +247,6 @@ where
 }
 
 // Dot product of two tensors (treated as vectors)
-// #[cfg(not(feature = "rayon"))]
 pub fn dot<P: Num + Copy + std::iter::Sum, T0: TensorView<P>, T1: TensorView<P>>(
     x_vec: &T0,
     y_vec: &T1,
@@ -255,19 +258,6 @@ pub fn dot<P: Num + Copy + std::iter::Sum, T0: TensorView<P>, T1: TensorView<P>>
         .map(|(&a, &b)| a * b)
         .sum()
 }
-
-// #[cfg(feature = "rayon")]
-// pub fn dot<'a, T>(x_vec: &'a Tensor<T>, y_vec: &'a Tensor<T>) -> T
-// where
-//     T: Num + Copy + std::iter::Sum + Sync + Send,
-// {
-//     debug_assert!(x_vec.size() == y_vec.size());
-//     use rayon::{iter::ParallelIterator, prelude::IntoParallelIterator};
-//     (x_vec.data(), y_vec.data())
-//         .into_par_iter()
-//         .map(|(&a, &b)| a * b)
-//         .sum()
-// }
 
 // Samples an index from a tensor (treated as a probability vector)
 pub fn random_sample<P: Float + Copy, T: TensorView<P>>(
@@ -282,12 +272,14 @@ pub fn random_sample<P: Float + Copy, T: TensorView<P>>(
         return x
             .data_iter()
             .enumerate()
-            .max_by(|(_, a), (_, b)| {
+            .filter(|(_, i)| i.is_normal() || i.is_zero())
+            .max_by(|(_, &a), (_, &b)| {
                 if a > b {
                     Ordering::Greater
                 } else if a < b {
                     Ordering::Less
                 } else {
+                    // ignores Nan Inf ...
                     Ordering::Equal
                 }
             })
@@ -333,6 +325,7 @@ pub fn random_sample<P: Float + Copy, T: TensorView<P>>(
     let mut logits = x
         .data_iter()
         .enumerate()
+        .filter(|(_, i)| i.is_normal() || i.is_zero())
         .map(Probability::from)
         .collect::<Vec<_>>();
     logits.sort_unstable();
@@ -395,16 +388,11 @@ fn test_rms_norm() {
             let x_src = vec![1., 2., 3., 4.];
             let w_src = vec![1., 2.];
 
-            let mut y = Tensor::<$type_>::new(
-                y_src.into_iter().map($type_converter).collect(),
-                &vec![2, 2],
-            );
-            let x = Tensor::<$type_>::new(
-                x_src.into_iter().map($type_converter).collect(),
-                &vec![2, 2],
-            );
-            let w =
-                Tensor::<$type_>::new(w_src.into_iter().map($type_converter).collect(), &vec![2]);
+            let mut y =
+                Tensor::<$type_>::new(y_src.into_iter().map($type_converter).collect(), &[2, 2]);
+            let x =
+                Tensor::<$type_>::new(x_src.into_iter().map($type_converter).collect(), &[2, 2]);
+            let w = Tensor::<$type_>::new(w_src.into_iter().map($type_converter).collect(), &[2]);
             rms_norm(&mut y, &x, &w, 1e-6);
             assert!(y.close_to(
                 &Tensor::<$type_>::new(
@@ -412,7 +400,7 @@ fn test_rms_norm() {
                         .into_iter()
                         .map($type_converter)
                         .collect(),
-                    &vec![2, 2]
+                    &[2, 2]
                 ),
                 $tolerance
             ));

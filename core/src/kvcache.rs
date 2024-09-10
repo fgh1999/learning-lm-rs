@@ -186,7 +186,7 @@ impl<'a, T: Copy, P: Num + Default + Copy> CachedTensor<'a, T, P> {
 }
 
 impl<'a, T: Copy, P: Num + Default + Copy> TensorView<P> for CachedTensor<'a, T, P> {
-    fn data_at<'b>(&'b self, idx: &[usize]) -> &'b P {
+    fn data_at(&self, idx: &[usize]) -> &P {
         let (target, offset) = self.to_target(idx);
         target.data_at(&[offset])
     }

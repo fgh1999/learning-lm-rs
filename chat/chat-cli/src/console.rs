@@ -1,6 +1,7 @@
 use lm_infer_core::message::{ChatMessage, ChatRole};
 use std::io::Write;
 
+/// Console I/O Utility
 pub struct Console<'h> {
     chat_history: &'h [ChatMessage],
 }
@@ -17,6 +18,7 @@ impl<'h, 'a: 'h> From<&'a Vec<ChatMessage>> for Console<'h> {
 }
 
 impl<'h> Console<'h> {
+    /// Obtains and returns input from the user
     pub fn user_input(&self) -> String {
         let ith = self
             .chat_history
@@ -29,14 +31,18 @@ impl<'h> Console<'h> {
         std::io::stdin().read_line(&mut input).unwrap();
         input.trim().to_string()
     }
+
+    /// Prints a message as an user
     pub fn user_println(msg: &str) {
         println!("You: {}", msg);
     }
 
+    /// Prints a message as a system
     pub fn system_println(msg: &str) {
         println!("System: {}", msg);
     }
 
+    /// Prints a message as an assistant
     pub fn assistant_println(msg: &str) {
         println!("Assistant: {}", msg);
     }
