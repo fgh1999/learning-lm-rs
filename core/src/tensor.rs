@@ -4,7 +4,7 @@ use std::{fmt::Debug, slice, sync::Arc};
 
 #[derive(Getters, Clone)]
 pub struct Tensor<T: Num> {
-    data: Arc<Box<[T]>>,
+    data: Arc<[T]>,
     #[getset(get = "pub")]
     shape: Vec<usize>,
     storage_offset: usize,
@@ -120,7 +120,7 @@ impl<T: Num> Tensor<T> {
     pub fn new(data: Vec<T>, shape: &[usize]) -> Self {
         let length = data.len();
         Tensor {
-            data: Arc::new(data.into_boxed_slice()),
+            data: data.into(),
             shape: shape.to_vec(),
             storage_offset: 0,
             length,

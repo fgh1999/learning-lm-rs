@@ -179,15 +179,14 @@ fn check_matmul_shape<
 #[cfg(not(feature = "rayon"))]
 pub fn matmul_transb<
     P: Float + std::iter::Sum,
-    W: Float,
     D: WritableTensorView<P>,
     S: TensorView<P>,
 >(
     c: &mut D,
-    beta: W,
+    beta: impl Float,
     a: &S,
     b: &S,
-    alpha: W,
+    alpha: impl Float,
 ) {
     check_matmul_shape(c, a, b);
     let vec_shape = [a.shape()[1]];
