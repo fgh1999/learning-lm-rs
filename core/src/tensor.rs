@@ -1,6 +1,6 @@
 use getset::Getters;
 use num_traits::{Float, Num};
-use std::{fmt::Debug, slice, sync::Arc};
+use std::{fmt::Debug, ops::Index, slice, sync::Arc};
 
 #[derive(Getters, Clone)]
 pub struct Tensor<T: Num> {
@@ -16,14 +16,17 @@ impl<T: Num + Copy + Default> Tensor<T> {
         Self::new(vec![T::default(); shape.iter().product()], shape)
     }
 }
+impl<T: Num> Index<&[usize]> for Tensor<T>
+where
+    Tensor<T>: TensorIndex,
+{
+    type Output = T;
+    fn index(&self, idx: &[usize]) -> &Self::Output {
+        &self.data()[self.to_offset(idx)]
+    }
+}
 
-pub trait TensorView<T> {
-    /// Returns the reference to the data at a given index.
-    fn data_at(&self, idx: &[usize]) -> &T;
-    /// Returns an iterator over the data.
-    fn data_iter<'a>(&'a self) -> impl Iterator<Item = &'a T>
-    where
-        T: 'a;
+pub trait TensorIndex {
     fn index_to_offset(idx: &[usize], shape: &[usize]) -> usize {
         idx.iter()
             .zip(shape)
@@ -46,10 +49,29 @@ pub trait TensorView<T> {
     }
     fn size(&self) -> usize;
     fn shape(&self) -> &[usize];
-    fn slice(&self, start: usize, shape: &[usize]) -> Self;
+}
+impl<T: Num> TensorIndex for Tensor<T> {
+    fn size(&self) -> usize {
+        self.length
+    }
+    fn shape(&self) -> &[usize] {
+        &self.shape
+    }
 }
 
-impl<T: Num> TensorView<T> for Tensor<T> {
+pub trait TensorView<T>: TensorIndex {
+    /// Returns the reference to the data at a given index.
+    fn data_at(&self, idx: &[usize]) -> &T;
+    /// Returns an iterator over the data.
+    fn data_iter<'a>(&'a self) -> impl Iterator<Item = &'a T>
+    where
+        T: 'a;
+    fn slice(&self, start: usize, shape: &[usize]) -> Self;
+}
+impl<T: Num> TensorView<T> for Tensor<T>
+where
+    Tensor<T>: TensorIndex,
+{
     fn data_at(&self, idx: &[usize]) -> &T {
         &self.data()[self.to_offset(idx)]
     }
@@ -68,12 +90,6 @@ impl<T: Num> TensorView<T> for Tensor<T> {
             storage_offset: self.storage_offset + start,
             length,
         }
-    }
-    fn size(&self) -> usize {
-        self.length
-    }
-    fn shape(&self) -> &[usize] {
-        &self.shape
     }
 }
 
@@ -197,10 +213,10 @@ fn test_data_at_idx() {
     let t = Tensor::<f32>::new(vec![1., 2., 3., 4., 5., 6.], &vec![2, 3]);
     // [[1., 2., 3.],
     // [4., 5., 6.]]
-    assert_eq!(t.data_at(&[0, 0]), &1.);
-    assert_eq!(t.data_at(&[0, 1]), &2.);
-    assert_eq!(t.data_at(&[0, 2]), &3.);
-    assert_eq!(t.data_at(&[1, 0]), &4.);
+    assert_eq!(t[&[0, 0]], 1.);
+    assert_eq!(t[&[0, 1]], 2.);
+    assert_eq!(t[&[0, 2]], 3.);
+    assert_eq!(t[&[1, 0]], 4.);
 }
 
 #[test]
@@ -212,10 +228,10 @@ fn test_mutate_data_at_idx() {
     assert_eq!(unsafe { t.with_data_mut_at(&[0, 1], |x| x + 1.) }, 2.);
     assert_eq!(unsafe { t.with_data_mut_at(&[0, 2], |x| x + 1.) }, 3.);
     assert_eq!(unsafe { t.with_data_mut_at(&[1, 0], |x| x + 1.) }, 4.);
-    assert_eq!(t.data_at(&[0, 0]), &2.);
-    assert_eq!(t.data_at(&[0, 1]), &3.);
-    assert_eq!(t.data_at(&[0, 2]), &4.);
-    assert_eq!(t.data_at(&[1, 0]), &5.);
+    assert_eq!(t[&[0, 0]], 2.);
+    assert_eq!(t[&[0, 1]], 3.);
+    assert_eq!(t[&[0, 2]], 4.);
+    assert_eq!(t[&[1, 0]], 5.);
 }
 
 #[test]

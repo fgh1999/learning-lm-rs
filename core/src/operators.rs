@@ -3,7 +3,7 @@ use std::{
     ops::{DivAssign, MulAssign},
 };
 
-use crate::tensor::{Tensor, TensorView, WritableTensorView};
+use crate::tensor::{Tensor, TensorIndex, TensorView, WritableTensorView};
 use num_traits::{Float, Num};
 #[cfg(feature = "rayon")]
 use rayon::prelude::*;
@@ -177,11 +177,7 @@ fn check_matmul_shape<
 // C = beta * C + alpha * A @ B^T
 // Assume that A is of shape (m, k), B is of shape (n, k), C is of shape (m, n).
 #[cfg(not(feature = "rayon"))]
-pub fn matmul_transb<
-    P: Float + std::iter::Sum,
-    D: WritableTensorView<P>,
-    S: TensorView<P>,
->(
+pub fn matmul_transb<P: Float + std::iter::Sum, D: WritableTensorView<P>, S: TensorView<P>>(
     c: &mut D,
     beta: impl Float,
     a: &S,

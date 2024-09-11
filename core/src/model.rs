@@ -3,7 +3,7 @@ use crate::{
     kvcache::KVCache,
     operators::{self as OP, cartesian_product2},
     params::LlamaParams,
-    tensor::{Tensor, TensorView},
+    tensor::{Tensor, TensorIndex, TensorView},
 };
 use getset::Getters;
 use num_traits::{Float, Num};
@@ -310,7 +310,7 @@ fn self_attention<
         // no parallelization on `tseq_idx` because of the data race on `hidden_vec`
         cartesian_product2(0..n_kv_h, 0..total_seq_len).for_each(|(kv_idx, tseq_idx)| {
             let v_vec = v.slice(v.to_offset(&[tseq_idx, kv_idx, 0]), &[dqkv]);
-            let att_score = att_scores.data_at(&[kv_idx, g_idx, seq_idx, tseq_idx]);
+            let att_score = att_scores[&[kv_idx, g_idx, seq_idx, tseq_idx]];
             let mut hidden_vec =
                 hidden.slice(hidden.to_offset(&[seq_idx, kv_idx, g_idx, 0]), &[dqkv]);
             unsafe {
@@ -479,12 +479,12 @@ pub fn test_load_safetensors_from_chat_model() {
         1e-6
     ));
     assert!(float_eq(
-        model.params.embedding_table.data_at(&[31012, 55]),
+        &model.params.embedding_table[&[31012, 55]],
         &-0.009104947,
         1e-6
     ));
     assert!(float_eq(
-        model.params.lm_head.data_at(&[20100, 3]),
+        &model.params.lm_head[&[20100, 3]],
         &-0.032863498,
         1e-6
     ));

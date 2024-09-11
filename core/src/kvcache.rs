@@ -3,7 +3,7 @@ use std::ops::Range;
 use getset::{CopyGetters, Getters, MutGetters};
 use num_traits::Num;
 
-use crate::tensor::{Tensor, TensorView, WritableTensorView};
+use crate::tensor::{Tensor, TensorIndex, TensorView, WritableTensorView};
 
 #[derive(CopyGetters)]
 pub struct KVCache<TID: Copy, P: Num + Default + Copy> {
@@ -148,6 +148,15 @@ pub struct CachedTensor<'a, T: Copy, P: Num + Default + Copy> {
     layer_idx: usize,
 }
 
+impl<'a, T: Copy, P: Num + Default + Copy> TensorIndex for CachedTensor<'a, T, P> {
+    fn size(&self) -> usize {
+        self.length
+    }
+    fn shape(&self) -> &[usize] {
+        &self.shape
+    }
+}
+
 unsafe impl<'a, T: Copy, P: Num + Default + Copy> WritableTensorView<P> for CachedTensor<'a, T, P> {
     unsafe fn with_data_mut_at(&mut self, idx: &[usize], op: impl FnOnce(&P) -> P) -> P {
         let (target, offset) = self.to_target(idx);
@@ -185,6 +194,14 @@ impl<'a, T: Copy, P: Num + Default + Copy> CachedTensor<'a, T, P> {
     }
 }
 
+impl<'a, T: Copy, P: Num + Default + Copy> std::ops::Index<&[usize]> for CachedTensor<'a, T, P> {
+    type Output = P;
+    fn index(&self, idx: &[usize]) -> &Self::Output {
+        let (target, offset) = self.to_target(idx);
+        &target[&[offset]]
+    }
+}
+
 impl<'a, T: Copy, P: Num + Default + Copy> TensorView<P> for CachedTensor<'a, T, P> {
     fn data_at(&self, idx: &[usize]) -> &P {
         let (target, offset) = self.to_target(idx);
@@ -203,14 +220,6 @@ impl<'a, T: Copy, P: Num + Default + Copy> TensorView<P> for CachedTensor<'a, T,
             })
             .skip(self.offset)
             .take(self.length)
-    }
-
-    fn size(&self) -> usize {
-        self.length
-    }
-
-    fn shape(&self) -> &[usize] {
-        &self.shape
     }
 
     fn slice(&self, start: usize, shape: &[usize]) -> Self {
@@ -283,8 +292,8 @@ mod tests {
                 };
                 assert_eq!(cached_tensor.size(), 6);
                 assert_eq!(cached_tensor.shape(), &[2, 3]);
-                assert_eq!(*cached_tensor.data_at(&[0, 0]), 0.);
-                assert_eq!(*cached_tensor.data_at(&[1, 2]), 14.);
+                assert_eq!(cached_tensor[&[0, 0]], 0.);
+                assert_eq!(cached_tensor[&[1, 2]], 14.);
                 let iter_order = [0., 1., 2., 12., 13., 14.];
                 cached_tensor
                     .data_iter()
@@ -296,7 +305,7 @@ mod tests {
                 let sliced_cached_tensor = cached_tensor.slice(2, &[2, 1]);
                 assert_eq!(sliced_cached_tensor.size(), 2);
                 assert_eq!(sliced_cached_tensor.shape(), &[2, 1]);
-                assert_eq!(*sliced_cached_tensor.data_at(&[1, 0]), 12.);
+                assert_eq!(sliced_cached_tensor[&[1, 0]], 12.);
             }
             {
                 // read v
@@ -309,7 +318,7 @@ mod tests {
                     layer_idx: 1,
                 };
                 assert_eq!(cached_tensor.size(), 3);
-                assert_eq!(*cached_tensor.data_at(&[0, 1]), 22.);
+                assert_eq!(cached_tensor[&[0, 1]], 22.);
             }
         }
 
@@ -346,8 +355,7 @@ mod tests {
             let prev_val = unsafe { sliced_cached_tensor.with_data_mut_at(&idx, |&x| x + 233.) };
             assert_eq!(prev_val, new_vals.last().unwrap().clone());
             assert!(
-                (sliced_cached_tensor.data_at(&idx) - (new_vals.last().unwrap().clone() + 233.))
-                    .abs()
+                (sliced_cached_tensor[&idx] - (new_vals.last().unwrap().clone() + 233.)).abs()
                     <= 1e-6
             );
         }
