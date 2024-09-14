@@ -1,4 +1,8 @@
-use crate::{kvcache::KVCache, model::LmModel, operators as OP, tensor::Tensor};
+use crate::{
+    kvcache::KVCache,
+    model::LmModel,
+    operators as OP,
+};
 use getset::Getters;
 use num_traits::{Float, Num};
 use std::{
@@ -12,7 +16,7 @@ pub struct LmSession<P: Float + Default + Copy, TID: Num + Copy, M: LmModel<TID,
     kv_cache: KVCache<TID, P>,
     model: Arc<M>,
     #[getset(get = "pub")]
-    records: Vec<PerfTimeRecord>,
+    records: Vec<PerfTimeRecord>, // TODO: records也要记录末块Arc指针
 }
 
 #[derive(Default, Debug)]
@@ -108,14 +112,19 @@ pub trait TokenGeneration {
         repetition_penalty: Option<f32>,
     ) -> Vec<u32>;
 
-    /// Reverts the session to the state before the ith generation.
-    /// Returns an iterator of all the token ids after this revertion.
-    fn revert_to_before(&mut self, ith: usize) -> impl Iterator<Item = u32>;
-
     fn generation_records(&self) -> &[PerfTimeRecord];
 }
 impl<
-        P: Float + std::iter::Sum + Sync + Send + MulAssign + DivAssign + AddAssign + Copy + Default,
+        P: 'static
+            + Float
+            + std::iter::Sum
+            + Sync
+            + Send
+            + MulAssign
+            + DivAssign
+            + AddAssign
+            + Copy
+            + Default,
         M: LmModel<u32, P>,
     > TokenGeneration for LmSession<P, u32, M>
 {
@@ -132,13 +141,19 @@ impl<
         assert!(repetition_penalty.map(|r| r > 0.).unwrap_or(true));
         let mut result = Vec::<u32>::new();
 
+        // 根据本地的token_ids 从global KvCache的RadixTrees中 检索/创建 出对应的KvCacheBlock序列
+        // 动态申请KvCache的空间
+
+        // 一次 generation 中，一直 写锁住 末块
+        // 这样对末块进行变更的时候，可以无所顾忌地写入这个块的剩余Unit
+        // 等别的session可以读/写这个块的时候，本session对这个块的变更已经完成了
         macro_rules! generate_next_token_id {
-            ($prompt_token_ids:expr) => {{
-                let token_ids_len = $prompt_token_ids.len();
-                let token_tensor = Tensor::<u32>::new($prompt_token_ids, &[1, token_ids_len]);
-                let mut logits = self.model.forward(&token_tensor, &mut self.kv_cache);
+            ($prompt_token_ids:expr, $buffer:expr) => {{
+                let mut logits = self.model.forward(&$prompt_token_ids, &mut self.kv_cache, $buffer, false).unwrap();
+                // TODO: 检查是否可以stablize，stablize后发起一次与global kvcache的同步
+
                 if let Some(repetition_penalty) = repetition_penalty {
-                    OP::repetition_penalty(&mut logits, repetition_penalty, token_tensor.data())
+                    OP::repetition_penalty(&mut logits, repetition_penalty, &$prompt_token_ids)
                 }
                 OP::random_sample(&logits, top_p, top_k, temperature)
             }};
@@ -149,20 +164,22 @@ impl<
         #[allow(unused_variables)]
         let first_iter_duration = Duration::default();
 
+        // prefill
         result.push({
-            let prompt_token_ids = if !token_ids.is_empty() {
-                token_ids.to_vec()
-            } else {
+            let prompt_token_ids = if token_ids.is_empty() {
                 vec![self.model.bos_token_id()]
+            } else {
+                token_ids.to_vec()
             };
-            generate_next_token_id!(prompt_token_ids)
+            let mut buffer = self.model.alloc_forward_buffer(prompt_token_ids.len());
+            generate_next_token_id!(prompt_token_ids, &mut buffer)
         });
 
         #[cfg(feature = "perf")]
         let first_iter_duration = start.elapsed();
-
+        let mut buffer = self.model.alloc_forward_buffer(1);
         while result.len() < max_len && result.last() != Some(&self.model.eos_token_id()) {
-            result.push(generate_next_token_id!(vec![*result.last().unwrap()]));
+            result.push(generate_next_token_id!(vec![*result.last().unwrap()], &mut buffer));
         }
 
         #[allow(unused_variables)]
@@ -178,17 +195,6 @@ impl<
         self.records.push(record);
 
         result
-    }
-
-    fn revert_to_before(&mut self, ith: usize) -> impl Iterator<Item = u32> {
-        self.records.truncate(ith);
-        self.kv_cache.truncate(
-            self.records
-                .last()
-                .map(|record| record.prompt_token_num + record.output_token_num)
-                .unwrap_or(0),
-        );
-        self.kv_cache.token_ids()
     }
 
     fn generation_records(&self) -> &[PerfTimeRecord] {

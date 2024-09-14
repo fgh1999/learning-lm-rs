@@ -97,7 +97,7 @@ pub fn rms_norm<P: Float + std::iter::Sum>(
         .iter()
         .rev()
         .zip(x.shape().iter().rev())
-        .all(|(&w_s, &x_s)| w_s == x_s));
+        .all(|(w_s, x_s)| w_s == x_s));
     let epsilon = P::from(epsilon).unwrap();
 
     let chunk_size = w.shape().iter().product();

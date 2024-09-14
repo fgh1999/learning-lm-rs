@@ -116,64 +116,6 @@ fn generate(
     }
 }
 
-#[put("/revert/<sess_id>", data = "<ith_gen>")]
-fn revert(
-    sess_id: &str,
-    ith_gen: &str,
-    chat_service: &State<ChatService<LmSession<ModelParamType, u32, Llama<ModelParamType>>>>,
-) -> status::Custom<content::RawJson<String>> {
-    let Ok(ith_gen) = ith_gen.parse::<usize>() else {
-        return status::Custom(
-            Status::BadRequest,
-            content::RawJson(
-                serde_json::to_string(&GenerationError {
-                    err_msg: format!("Invalid ith_gen: {}, should be of u64", ith_gen),
-                })
-                .unwrap(),
-            ),
-        );
-    };
-
-    let reverted_token_ids = chat_service.with_session_mut(sess_id, |sess| {
-        let cur_gen_times = sess.generation_records().len();
-        if ith_gen >= cur_gen_times {
-            Err("ith_gen out of range")
-        } else {
-            info!(
-                "Revert session {} to the state before {}th generation",
-                sess_id, ith_gen
-            );
-            Ok(sess.revert_to_before(ith_gen).collect::<Vec<u32>>())
-        }
-    });
-    match reverted_token_ids {
-        Some(reverted_token_ids) => match reverted_token_ids {
-            Ok(reverted_token_ids) => status::Custom(
-                Status::Ok,
-                content::RawJson(serde_json::to_string(&reverted_token_ids).unwrap()),
-            ),
-            Err(err_msg) => status::Custom(
-                Status::BadRequest,
-                content::RawJson(
-                    serde_json::to_string(&GenerationError {
-                        err_msg: err_msg.to_owned(),
-                    })
-                    .unwrap(),
-                ),
-            ),
-        },
-        None => status::Custom(
-            Status::NotFound,
-            content::RawJson(
-                serde_json::to_string(&GenerationError {
-                    err_msg: "Session not found".to_owned(),
-                })
-                .unwrap(),
-            ),
-        ),
-    }
-}
-
 #[launch]
 fn rocket() -> _ {
     env_logger::init();
@@ -195,8 +137,5 @@ fn rocket() -> _ {
             info!("Model loaded from {:?}", model_dir);
             llama
         })
-        .mount(
-            "/",
-            routes![create_session, remove_session, generate, revert],
-        )
+        .mount("/", routes![create_session, remove_session, generate])
 }

@@ -5,7 +5,7 @@ use crate::{
     params::LlamaParams,
     tensor::{Tensor, TensorIndex, TensorView},
 };
-use getset::Getters;
+use getset::{CopyGetters, Getters};
 use num_traits::{Float, Num};
 #[cfg(feature = "rayon")]
 use rayon::prelude::*;
@@ -45,12 +45,26 @@ pub struct PerfInfo {
 }
 
 pub trait LmModel<TID: Num + Copy, P: Float + Default + Copy> {
-    fn forward(&self, input: &Tensor<TID>, cache: &mut KVCache<TID, P>) -> Tensor<P>;
+    fn forward(&self, input: &[TID], cache: &mut KVCache<TID, P>, buffer: &mut ForwardBuffer<P>, is_prefill: bool) -> Option<Tensor<P>>;
+    fn alloc_forward_buffer(&self, seq_len: usize) -> ForwardBuffer<P>;
     fn layer_num(&self) -> usize;
     fn max_seq_len(&self) -> usize;
     fn kv_dim(&self) -> usize;
     fn bos_token_id(&self) -> TID;
     fn eos_token_id(&self) -> TID;
+}
+
+#[derive(CopyGetters)]
+pub struct ForwardBuffer<P: Float + Default + Copy> {
+    pub residual: Tensor<P>,
+    pub hidden_states: Tensor<P>,
+    pub q_buf: Tensor<P>,
+    pub att_scores: Tensor<P>,
+    pub gate_buf: Tensor<P>,
+    pub up_buf: Tensor<P>,
+    /// The maximum token sequence length that this buffer can handle
+    #[getset(get_copy = "pub")]
+    max_seq_len: usize,
 }
 
 impl<
@@ -66,24 +80,39 @@ impl<
             + Default,
     > LmModel<u32, P> for Llama<P>
 {
-    fn forward(&self, input: &Tensor<u32>, cache: &mut KVCache<u32, P>) -> Tensor<P> {
-        let seq_len = input.size();
+    fn alloc_forward_buffer(&self, seq_len: usize) -> ForwardBuffer<P> {
+        let n_groups = self.n_q_h / self.n_kv_h;
+        ForwardBuffer {
+            residual: Tensor::<P>::default(&[seq_len, self.d]),
+            hidden_states: Tensor::<P>::default(&[seq_len, self.d]),
+            q_buf: Tensor::<P>::default(&[seq_len, self.n_q_h * self.dqkv]),
+            att_scores: Tensor::<P>::default(&[self.n_kv_h, n_groups, seq_len, self.max_seq_len]),
+            gate_buf: Tensor::<P>::default(&[seq_len, self.di]),
+            up_buf: Tensor::<P>::default(&[seq_len, self.di]),
+            max_seq_len: seq_len,
+        }
+    }
+
+    fn forward(&self, appended_input: &[u32], cache: &mut KVCache<u32, P>, buffer: &mut ForwardBuffer<P>, is_prefill: bool) -> Option<Tensor<P>> {
+        let appended_input =
+            Tensor::<u32>::new(appended_input.to_owned(), &[1, appended_input.len()]);
+        let seq_len = appended_input.size();
         let past_seq_len = cache.seq_len();
-        cache.push_from(input.data()).unwrap();
+        cache.push_from(appended_input.data()).unwrap();
         let total_seq_len = cache.seq_len();
         let n_groups = self.n_q_h / self.n_kv_h;
 
         // Some pre-allocated buffers that will be reused
-        let mut residual = Tensor::<P>::default(&[seq_len, self.d]);
-        let mut hidden_states = Tensor::<P>::default(&[seq_len, self.d]);
-        let mut q_buf = Tensor::<P>::default(&[seq_len, self.n_q_h * self.dqkv]);
-        let mut att_scores = Tensor::<P>::default(&[self.n_kv_h, n_groups, seq_len, total_seq_len]);
-        let mut gate_buf = Tensor::<P>::default(&[seq_len, self.di]);
-        let mut up_buf = Tensor::<P>::default(&[seq_len, self.di]);
+        let mut residual = buffer.residual.slice(0, &[seq_len, self.d]);
+        let mut hidden_states = buffer.hidden_states.slice(0, &[seq_len, self.d]);
+        let mut q_buf = buffer.q_buf.slice(0, &[seq_len, self.n_q_h * self.dqkv]);
+        let mut att_scores = buffer.att_scores.slice(0, &[self.n_kv_h, n_groups, seq_len, total_seq_len]);
+        let mut gate_buf = buffer.gate_buf.slice(0, &[seq_len, self.di]);
+        let mut up_buf = buffer.up_buf.slice(0, &[seq_len, self.di]);
 
         // Computation Starts Here
         // Embedding lookup
-        OP::gather(&mut residual, input, &self.params.embedding_table);
+        OP::gather(&mut residual, &appended_input, &self.params.embedding_table);
 
         for layer in 0..self.n_layers {
             // Multi-head self-attention
@@ -96,8 +125,6 @@ impl<
                 );
 
                 let q = q_buf.reshape(&[seq_len, self.n_q_h * self.dqkv]); // (seq, n_h * dqkv)
-                let k = &mut cache.k_cache_within(layer, past_seq_len..total_seq_len); // (seq, n_kv_h * dqkv)
-                let v = &mut cache.v_cache_within(layer, past_seq_len..total_seq_len); // (seq, n_kv_h * dqkv)
                 OP::matmul_transb(
                     q,
                     P::zero(),
@@ -105,30 +132,38 @@ impl<
                     &self.params.wq[layer],
                     P::one(),
                 );
-                OP::matmul_transb(
-                    k,
-                    P::zero(),
-                    &hidden_states,
-                    &self.params.wk[layer],
-                    P::one(),
-                );
-                OP::matmul_transb(
-                    v,
-                    P::zero(),
-                    &hidden_states,
-                    &self.params.wv[layer],
-                    P::one(),
-                );
                 OP::rope(
                     q.reshape(&[seq_len, self.n_q_h, self.dqkv]),
                     past_seq_len,
                     self.rope_theta,
                 );
-                OP::rope(
-                    k.reshape(&[seq_len, self.n_kv_h, self.dqkv]),
-                    past_seq_len,
-                    self.rope_theta,
-                );
+
+                // buffer for the k & v values for the newly-appended sequence
+                {
+                    let k = &mut cache.k_cache_within(layer, past_seq_len..total_seq_len); // (seq, n_kv_h * dqkv)
+                    OP::matmul_transb(
+                        k,
+                        P::zero(),
+                        &hidden_states,
+                        &self.params.wk[layer],
+                        P::one(),
+                    );
+                    OP::rope(
+                        k.reshape(&[seq_len, self.n_kv_h, self.dqkv]),
+                        past_seq_len,
+                        self.rope_theta,
+                    );
+                }
+                {
+                    let v = &mut cache.v_cache_within(layer, past_seq_len..total_seq_len); // (seq, n_kv_h * dqkv)
+                    OP::matmul_transb(
+                        v,
+                        P::zero(),
+                        &hidden_states,
+                        &self.params.wv[layer],
+                        P::one(),
+                    );
+                }
 
                 let full_k = cache.full_k_cache(layer); // (total_seq, n_kv_h * dqkv)
                 let full_v = cache.full_v_cache(layer); // (total_seq, n_kv_h * dqkv)
@@ -166,6 +201,9 @@ impl<
                 self.eps,
             );
         }
+        if is_prefill {
+            return None;
+        }
 
         let mut hidden_states =
             hidden_states.slice(hidden_states.to_offset(&[seq_len - 1, 0]), &[1, self.d]);
@@ -188,7 +226,7 @@ impl<
             P::one(),
         );
 
-        logits
+        Some(logits)
     }
 
     fn layer_num(&self) -> usize {
