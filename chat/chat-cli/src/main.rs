@@ -125,7 +125,8 @@ async fn main() -> Result<()> {
                         continue;
                     }
 
-                    let _ = client.revert(target_ith).await?;
+                    // Revertions are only taken offline
+                    // let _ = client.revert(target_ith).await?;
                     chat_history.truncate(target_ith * 2 + 1);
                     Console::system_println(&format!(
                         "Reverted to the state before {}th generation",

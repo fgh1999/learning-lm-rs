@@ -53,18 +53,18 @@ impl EndpointClient {
         Ok(serde_json::from_slice(&generated_token_ids).unwrap())
     }
 
-    pub async fn revert(&self, ith_gen: usize) -> Result<Vec<u32>, reqwest::Error> {
-        let url = format!("{}/revert/{}", self.base_url, self.sess_id);
+    // pub async fn revert(&self, ith_gen: usize) -> Result<Vec<u32>, reqwest::Error> {
+    //     let url = format!("{}/revert/{}", self.base_url, self.sess_id);
 
-        let reverted_token_ids = self
-            .client
-            .put(&url)
-            .body(ith_gen.to_string())
-            .send()
-            .await?
-            .error_for_status()?
-            .bytes()
-            .await?;
-        Ok(serde_json::from_slice(&reverted_token_ids).unwrap())
-    }
+    //     let reverted_token_ids = self
+    //         .client
+    //         .put(&url)
+    //         .body(ith_gen.to_string())
+    //         .send()
+    //         .await?
+    //         .error_for_status()?
+    //         .bytes()
+    //         .await?;
+    //     Ok(serde_json::from_slice(&reverted_token_ids).unwrap())
+    // }
 }

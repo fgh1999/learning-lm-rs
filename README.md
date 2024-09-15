@@ -159,7 +159,7 @@ fgh@LAPTOP-R9HIQ30Q:~/workplace/learning-lm-rs/chat/chat-server$
 
 在对话服务中，可以使用`:revert_to <ith>`命令来返回至指定问答前状态。
 
-除此之外，这有一个简单的本地验证：
+除此之外，这曾经有过一个简单的本地验证（on 95e60a404da531）：
 ```bash
 cd chat/chat-revert
 cargo r --release -- -m ../../models/chat/
