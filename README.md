@@ -171,8 +171,9 @@ cargo r --release -- -m ../../models/chat/
 
 # 测试
 
-- 添加各数据类型在各泛型算子上的简单测试。
-- 重写KvCache，添加Tensor和sliced kvcache的视图读写trait，添加单元测试。
+- 添加各数据类型在各泛型算子上的简单测试；
+- 重写KvCache：全局缓存使用RadixTree管理；
+- 添加Tensor和sliced kvcache的视图读写trait，添加单元测试。
 - 通过rayon并行化部分算子，添加单元测试。
 
 ```bash

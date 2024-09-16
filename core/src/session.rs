@@ -1,22 +1,23 @@
 use crate::{
-    kvcache::KVCache,
+    kvcache::{get_local_kv_cache_for, LocalKvCache, BLOCK_SIZE},
     model::LmModel,
     operators as OP,
 };
 use getset::Getters;
 use num_traits::{Float, Num};
 use std::{
+    marker::PhantomData,
     ops::{AddAssign, DivAssign, MulAssign},
     sync::Arc,
     time::Duration,
 };
 
 #[derive(Getters)]
-pub struct LmSession<P: Float + Default + Copy, TID: Num + Copy, M: LmModel<TID, P>> {
-    kv_cache: KVCache<TID, P>,
+pub struct LmSession<P: Float + Default + Copy, TID: Num + Copy + Eq, M: LmModel<TID, P>> {
     model: Arc<M>,
     #[getset(get = "pub")]
-    records: Vec<PerfTimeRecord>, // TODO: records也要记录末块Arc指针
+    records: Vec<PerfTimeRecord>,
+    _phantom: PhantomData<(P, TID)>,
 }
 
 #[derive(Default, Debug)]
@@ -48,12 +49,12 @@ impl PerfTimeRecord {
     }
 }
 
-impl<P: Float + Default + Copy, TID: Num + Copy, M: LmModel<TID, P>> LmSession<P, TID, M> {
+impl<P: Float + Default + Copy, TID: Num + Copy + Eq, M: LmModel<TID, P>> LmSession<P, TID, M> {
     pub fn new(model: Arc<M>) -> Self {
         LmSession {
-            kv_cache: KVCache::new(model.layer_num(), model.max_seq_len(), model.kv_dim()),
             model,
             records: Vec::new(),
+            _phantom: PhantomData,
         }
     }
 
@@ -139,25 +140,22 @@ impl<
     ) -> Vec<u32> {
         let max_len = max_len.min(self.model.max_seq_len() - token_ids.len());
         assert!(repetition_penalty.map(|r| r > 0.).unwrap_or(true));
+
+        let mut buffer = self.model.alloc_forward_buffer(BLOCK_SIZE);
+
         let mut result = Vec::<u32>::new();
-
-        // 根据本地的token_ids 从global KvCache的RadixTrees中 检索/创建 出对应的KvCacheBlock序列
-        // 动态申请KvCache的空间
-
-        // 一次 generation 中，一直 写锁住 末块
-        // 这样对末块进行变更的时候，可以无所顾忌地写入这个块的剩余Unit
-        // 等别的session可以读/写这个块的时候，本session对这个块的变更已经完成了
-        macro_rules! generate_next_token_id {
-            ($prompt_token_ids:expr, $buffer:expr) => {{
-                let mut logits = self.model.forward(&$prompt_token_ids, &mut self.kv_cache, $buffer, false).unwrap();
-                // TODO: 检查是否可以stablize，stablize后发起一次与global kvcache的同步
-
-                if let Some(repetition_penalty) = repetition_penalty {
-                    OP::repetition_penalty(&mut logits, repetition_penalty, &$prompt_token_ids)
-                }
-                OP::random_sample(&logits, top_p, top_k, temperature)
-            }};
-        }
+        let prompt_token_ids = if token_ids.is_empty() {
+            vec![self.model.bos_token_id()]
+        } else {
+            token_ids.to_vec()
+        };
+        // fetch KvCacheBlock sequence from global KvCache's RadixTrees according to local token_ids
+        let mut local_kv_cache: LocalKvCache<u32, P, BLOCK_SIZE> = get_local_kv_cache_for(
+            &prompt_token_ids,
+            self.model.layer_num(),
+            self.model.kv_dim(),
+        )
+        .unwrap();
 
         #[cfg(feature = "perf")]
         let start = std::time::Instant::now();
@@ -165,21 +163,41 @@ impl<
         let first_iter_duration = Duration::default();
 
         // prefill
-        result.push({
-            let prompt_token_ids = if token_ids.is_empty() {
-                vec![self.model.bos_token_id()]
-            } else {
-                token_ids.to_vec()
-            };
-            let mut buffer = self.model.alloc_forward_buffer(prompt_token_ids.len());
-            generate_next_token_id!(prompt_token_ids, &mut buffer)
-        });
+        while local_kv_cache.load_last_block() {
+            self.model
+                .forward_on_last_cache_block(&mut local_kv_cache, &mut buffer)
+                .map(|mut logits| {
+                    // get the last token's logits only at the end of the prompt tokens
+                    if let Some(repetition_penalty) = repetition_penalty {
+                        OP::repetition_penalty(&mut logits, repetition_penalty, &prompt_token_ids)
+                    }
+                    let next_token_id = OP::random_sample(&logits, top_p, top_k, temperature);
+                    result.push(next_token_id);
+                });
+            local_kv_cache.try_sync_last_block_into_global();
+        }
+        local_kv_cache.append_token_ids(&result);
+        drop(prompt_token_ids);
 
         #[cfg(feature = "perf")]
-        let first_iter_duration = start.elapsed();
-        let mut buffer = self.model.alloc_forward_buffer(1);
+        let prefill_duration = start.elapsed();
+
         while result.len() < max_len && result.last() != Some(&self.model.eos_token_id()) {
-            result.push(generate_next_token_id!(vec![*result.last().unwrap()], &mut buffer));
+            let next_token_id = {
+                assert!(local_kv_cache.load_last_block());
+                let mut logits = self
+                    .model
+                    .forward_on_last_cache_block(&mut local_kv_cache, &mut buffer)
+                    .unwrap();
+                local_kv_cache.try_sync_last_block_into_global();
+
+                if let Some(repetition_penalty) = repetition_penalty {
+                    OP::repetition_penalty(&mut logits, repetition_penalty, &result)
+                }
+                OP::random_sample(&logits, top_p, top_k, temperature)
+            };
+            result.push(next_token_id);
+            local_kv_cache.append_token_ids(&[next_token_id]);
         }
 
         #[allow(unused_variables)]
@@ -188,7 +206,7 @@ impl<
         let total_generation_duration = start.elapsed();
         let record = PerfTimeRecord {
             total_generation_duration,
-            prompt_duration: first_iter_duration,
+            prompt_duration: prefill_duration,
             prompt_token_num: token_ids.len(),
             output_token_num: result.len(),
         };

@@ -1,9 +1,9 @@
 use crate::{
     config::LlamaConfigJson,
-    kvcache::KVCache,
+    kvcache::{BlockSize, LocalKvCache},
     operators::{self as OP, cartesian_product2},
     params::LlamaParams,
-    tensor::{Tensor, TensorIndex, TensorView},
+    tensor::{Tensor, TensorIndex, TensorView, WritableTensorView},
 };
 use getset::{CopyGetters, Getters};
 use num_traits::{Float, Num};
@@ -44,8 +44,14 @@ pub struct PerfInfo {
     prompt_duration: Option<std::time::Duration>,
 }
 
-pub trait LmModel<TID: Num + Copy, P: Float + Default + Copy> {
-    fn forward(&self, input: &[TID], cache: &mut KVCache<TID, P>, buffer: &mut ForwardBuffer<P>, is_prefill: bool) -> Option<Tensor<P>>;
+pub trait LmModel<TID: Num + Copy + Eq, P: Float + Default + Copy> {
+    /// Returns the logits of the next token
+    /// if the given last cache block in the cache is the last block of the sequence.
+    fn forward_on_last_cache_block<const BLOCK_SIZE: BlockSize>(
+        &self,
+        cache: &mut LocalKvCache<TID, P, BLOCK_SIZE>,
+        buffer: &mut ForwardBuffer<P>,
+    ) -> Option<Tensor<P>>;
     fn alloc_forward_buffer(&self, seq_len: usize) -> ForwardBuffer<P>;
     fn layer_num(&self) -> usize;
     fn max_seq_len(&self) -> usize;
@@ -68,7 +74,8 @@ pub struct ForwardBuffer<P: Float + Default + Copy> {
 }
 
 impl<
-        P: Float
+        P: 'static
+            + Float
             + std::iter::Sum
             + Sync
             + Send
@@ -93,20 +100,41 @@ impl<
         }
     }
 
-    fn forward(&self, appended_input: &[u32], cache: &mut KVCache<u32, P>, buffer: &mut ForwardBuffer<P>, is_prefill: bool) -> Option<Tensor<P>> {
+    fn forward_on_last_cache_block<const BLOCK_SIZE: BlockSize>(
+        &self,
+        cache: &mut LocalKvCache<u32, P, BLOCK_SIZE>,
+        buffer: &mut ForwardBuffer<P>,
+    ) -> Option<Tensor<P>> {
         let appended_input =
-            Tensor::<u32>::new(appended_input.to_owned(), &[1, appended_input.len()]);
+            cache
+                .last_block
+                .as_ref()
+                .unwrap()
+                .read_token_ids(|token_ids, stablized_num| {
+                    let new_token_ids = token_ids[stablized_num..].to_vec();
+                    let l = new_token_ids.len();
+                    Tensor::<u32>::new(new_token_ids, &[1, l])
+                });
         let seq_len = appended_input.size();
-        let past_seq_len = cache.seq_len();
-        cache.push_from(appended_input.data()).unwrap();
-        let total_seq_len = cache.seq_len();
+        debug_assert!(seq_len <= BLOCK_SIZE);
+        let past_seq_len = cache.total_stable_common_token_num();
+        let total_seq_len = past_seq_len + seq_len;
         let n_groups = self.n_q_h / self.n_kv_h;
 
-        // Some pre-allocated buffers that will be reused
+        // Picks pre-allocated buffers
+        debug_assert!(buffer.max_seq_len >= seq_len);
+        debug_assert!(buffer
+            .att_scores
+            .shape()
+            .iter()
+            .zip([self.n_kv_h, n_groups, seq_len, total_seq_len].iter())
+            .all(|(b, r)| b >= r));
         let mut residual = buffer.residual.slice(0, &[seq_len, self.d]);
         let mut hidden_states = buffer.hidden_states.slice(0, &[seq_len, self.d]);
         let mut q_buf = buffer.q_buf.slice(0, &[seq_len, self.n_q_h * self.dqkv]);
-        let mut att_scores = buffer.att_scores.slice(0, &[self.n_kv_h, n_groups, seq_len, total_seq_len]);
+        let mut att_scores = buffer
+            .att_scores
+            .slice(0, &[self.n_kv_h, n_groups, seq_len, total_seq_len]);
         let mut gate_buf = buffer.gate_buf.slice(0, &[seq_len, self.di]);
         let mut up_buf = buffer.up_buf.slice(0, &[seq_len, self.di]);
 
@@ -138,35 +166,106 @@ impl<
                     self.rope_theta,
                 );
 
-                // buffer for the k & v values for the newly-appended sequence
-                {
-                    let k = &mut cache.k_cache_within(layer, past_seq_len..total_seq_len); // (seq, n_kv_h * dqkv)
-                    OP::matmul_transb(
-                        k,
-                        P::zero(),
-                        &hidden_states,
-                        &self.params.wk[layer],
-                        P::one(),
-                    );
-                    OP::rope(
-                        k.reshape(&[seq_len, self.n_kv_h, self.dqkv]),
-                        past_seq_len,
-                        self.rope_theta,
-                    );
-                }
-                {
-                    let v = &mut cache.v_cache_within(layer, past_seq_len..total_seq_len); // (seq, n_kv_h * dqkv)
-                    OP::matmul_transb(
-                        v,
-                        P::zero(),
-                        &hidden_states,
-                        &self.params.wv[layer],
-                        P::one(),
-                    );
-                }
+                cache
+                    .last_block
+                    .as_mut()
+                    .unwrap()
+                    .write_kv_cache_block(|block, &mut stablized_num| {
+                        let c = block.k();
+                        let c = c.slice(
+                            c.to_offset(&[stablized_num, 0, 0]),
+                            &[seq_len, self.layer_num(), self.kv_dim()],
+                        );
+                        // [seq_len, layer_num, kv_dim] ---layer--> [seq_len, kv_dim]
+                        let c = (0..seq_len)
+                            .map(|i| c.slice(c.to_offset(&[i, layer, 0]), &[self.kv_dim()]))
+                            .collect::<Vec<_>>();
+                        let mut c = VecTensor::new(c);
 
-                let full_k = cache.full_k_cache(layer); // (total_seq, n_kv_h * dqkv)
-                let full_v = cache.full_v_cache(layer); // (total_seq, n_kv_h * dqkv)
+                        OP::matmul_transb(
+                            &mut c,
+                            P::zero(),
+                            &hidden_states,
+                            &self.params.wk[layer],
+                            P::one(),
+                        );
+                        let mut c = c.slice(0, &[seq_len, self.n_kv_h, self.dqkv]);
+                        OP::rope(&mut c, past_seq_len, self.rope_theta);
+                    })
+                    .unwrap();
+                cache
+                    .last_block
+                    .as_mut()
+                    .unwrap()
+                    .write_kv_cache_block(|block, &mut stablized_num| {
+                        let c = block.v();
+                        let c = c.slice(
+                            c.to_offset(&[stablized_num, 0, 0]),
+                            &[seq_len, self.layer_num(), self.kv_dim()],
+                        );
+                        // [seq_len, layer_num, kv_dim] ---layer--> [seq_len, kv_dim]
+                        let c = (0..seq_len)
+                            .map(|i| c.slice(c.to_offset(&[i, layer, 0]), &[self.kv_dim()]))
+                            .collect::<Vec<_>>();
+                        let mut c = VecTensor::new(c);
+
+                        OP::matmul_transb(
+                            &mut c,
+                            P::zero(),
+                            &hidden_states,
+                            &self.params.wv[layer],
+                            P::one(),
+                        );
+                    })
+                    .unwrap();
+
+                // all used common units in the local cache
+                let full_k = cache
+                    .last_block
+                    .as_ref()
+                    .unwrap()
+                    .read_kv_cache_block(|block, _| {
+                        let stable_blocks = cache.stable_blocks();
+                        let stable_c_vec =
+                            stable_blocks
+                                .iter()
+                                .flat_map(|&(stable_block, common_len)| {
+                                    let c = stable_block.k();
+                                    (0..common_len).map(|i| {
+                                        c.slice(c.to_offset(&[i, layer, 0]), &[self.kv_dim()])
+                                    })
+                                });
+                        let mut k_vec = Vec::from_iter(stable_c_vec);
+                        k_vec.extend({
+                            let c = block.k();
+                            (0..block.used_token_num())
+                                .map(|i| c.slice(c.to_offset(&[i, layer, 0]), &[self.kv_dim()]))
+                        });
+                        VecTensor::new(k_vec)
+                    }); // (total_seq, n_kv_h * dqkv)
+                let full_v = cache
+                    .last_block
+                    .as_ref()
+                    .unwrap()
+                    .read_kv_cache_block(|block, _| {
+                        let stable_blocks = cache.stable_blocks();
+                        let stable_c_vec =
+                            stable_blocks
+                                .iter()
+                                .flat_map(|&(stable_block, common_len)| {
+                                    let c = stable_block.v();
+                                    (0..common_len).map(|i| {
+                                        c.slice(c.to_offset(&[i, layer, 0]), &[self.kv_dim()])
+                                    })
+                                });
+                        let mut v_vec = Vec::from_iter(stable_c_vec);
+                        v_vec.extend({
+                            let c = block.v();
+                            (0..block.used_token_num())
+                                .map(|i| c.slice(c.to_offset(&[i, layer, 0]), &[self.kv_dim()]))
+                        });
+                        VecTensor::new(v_vec)
+                    }); // (total_seq, n_kv_h * dqkv)
 
                 self_attention(
                     &mut hidden_states,
@@ -201,7 +300,20 @@ impl<
                 self.eps,
             );
         }
-        if is_prefill {
+
+        cache
+            .last_block
+            .as_mut()
+            .unwrap()
+            .write_kv_cache_block(|block, stablized_num| {
+                debug_assert_eq!(block.used_token_num(), *stablized_num + seq_len);
+                *stablized_num += seq_len;
+            })
+            .unwrap();
+
+        if !cache.remaining_token_ids().is_empty() {
+            // The last block is not at the last of the sequence.
+            // Still prefilling, not ready to generate the next token.
             return None;
         }
 
@@ -225,7 +337,6 @@ impl<
             &self.params.lm_head,
             P::one(),
         );
-
         Some(logits)
     }
 
@@ -379,6 +490,83 @@ fn mlp<P: Float + std::iter::Sum + Sync + Send + MulAssign>(
     OP::matmul_transb(up, P::zero(), hidden_states, w_up, P::one());
     OP::silu(up, gate);
     OP::matmul_transb(residual, P::one(), up, w_down, P::one());
+}
+
+struct VecTensor<P: Num> {
+    data: Vec<Tensor<P>>,
+    shape: Vec<usize>,
+    storage_offset: usize,
+}
+impl<P: Num> VecTensor<P> {
+    pub fn new(data: Vec<Tensor<P>>) -> Self {
+        Self {
+            shape: {
+                debug_assert!(!data.is_empty());
+                let mut shape = vec![data.len()];
+                shape.extend_from_slice(data[0].shape());
+                shape
+            },
+            data,
+            storage_offset: 0,
+        }
+    }
+}
+impl<P: Num> TensorIndex for VecTensor<P> {
+    fn size(&self) -> usize {
+        self.shape.iter().product()
+    }
+    fn shape(&self) -> &[usize] {
+        &self.shape
+    }
+}
+impl<P: Num + Clone> TensorView<P> for VecTensor<P> {
+    fn data_at(&self, idx: &[usize]) -> &P {
+        let offset = self.storage_offset + self.to_offset(idx);
+        let size_per_vec = self.data[0].size();
+        let v = &self.data[offset / size_per_vec];
+        let idx_within_vec = Self::offset_to_index(offset % size_per_vec, v.shape());
+        v.data_at(&idx_within_vec)
+    }
+    fn data_iter<'a>(&'a self) -> impl Iterator<Item = &'a P>
+    where
+        P: 'a,
+    {
+        self.data
+            .iter()
+            .flat_map(|t| t.data_iter())
+            .skip(self.storage_offset)
+            .take(self.size())
+    }
+    fn slice(&self, start: usize, shape: &[usize]) -> Self {
+        let length: usize = shape.iter().product();
+        assert!(length > 0 && length <= self.size() && start <= self.size() - length);
+        let offset = self.storage_offset + start;
+        let end = offset + length;
+        let size_per_vec = self.data[0].size();
+
+        let data = self.data[offset / size_per_vec..((end - 1) / size_per_vec + 1)].to_vec();
+        Self {
+            data,
+            shape: shape.to_vec(),
+            storage_offset: offset % size_per_vec,
+        }
+    }
+}
+unsafe impl<P: Num + Copy> WritableTensorView<P> for VecTensor<P> {
+    unsafe fn with_data_mut_at(&mut self, idx: &[usize], op: impl FnOnce(&P) -> P) -> P {
+        let data_ptr = self.data_at(idx);
+        let prev_val = *data_ptr;
+        let data_ptr = data_ptr as *const P as *mut P;
+        data_ptr.write(op(&prev_val));
+        prev_val
+    }
+    unsafe fn data_iter_mut<'a>(&'a mut self) -> impl Iterator<Item = &'a mut P>
+    where
+        P: 'a,
+    {
+        self.data_iter()
+            .map(|p| (p as *const P as *mut P).as_mut().unwrap())
+    }
 }
 
 #[test]
