@@ -2,7 +2,7 @@ use clap::Parser;
 use log::info;
 
 use lm_infer_core::{
-    model::Llama,
+    model::{Llama, ModelResource},
     service::ChatService,
     session::{LmSession, TokenGeneration},
 };
@@ -133,7 +133,15 @@ fn rocket() -> _ {
                 "Model directory does not exist: {:?}",
                 model_dir
             );
-            let llama = Arc::new(Llama::<ModelParamType>::from_safetensors(model_dir));
+
+            let llama = {
+                let resources = ModelResource {
+                    config: Some(std::fs::read(model_dir.join("config.json")).unwrap()),
+                    model_data: Some(std::fs::read(model_dir.join("model.safetensors")).unwrap()),
+                    ..Default::default()
+                };
+                Arc::new(Llama::<ModelParamType>::from_safetensors(&resources))
+            };
             info!("Model loaded from {:?}", model_dir);
             llama
         })

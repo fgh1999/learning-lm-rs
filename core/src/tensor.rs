@@ -105,6 +105,7 @@ pub unsafe trait WritableTensorView<T>: TensorView<T> {
     /// Writing to a tensor view is unsafe because it can not guarantee that the tensor is not shared.
     unsafe fn with_data_mut_at(&mut self, idx: &[usize], op: impl FnOnce(&T) -> T) -> T;
 
+    /// TODO: Remove this method
     /// Returns a mutable iterator over the data.
     ///
     /// # Safety

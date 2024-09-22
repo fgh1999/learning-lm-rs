@@ -11,7 +11,6 @@ use std::{
     sync::Mutex,
 };
 
-// type TID = u32;
 pub const BLOCK_SIZE: BlockSize = 4;
 
 struct TypeMap {

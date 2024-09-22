@@ -11,9 +11,7 @@ use num_traits::{Float, Num};
 use rayon::prelude::*;
 use safetensors::SafeTensors;
 use std::{
-    fs::File,
     ops::{AddAssign, DivAssign, MulAssign},
-    path::Path,
     sync::Mutex,
 };
 
@@ -357,15 +355,28 @@ impl<
     }
 }
 
+#[derive(Debug, Default)]
+pub struct ModelResource {
+    /// config.json
+    pub config: Option<Vec<u8>>,
+    /// model.safetensors
+    pub model_data: Option<Vec<u8>>,
+    /// generation_config.json
+    pub generation_config: Option<Vec<u8>>,
+    /// tokenizer.json
+    pub tokenizer: Option<Vec<u8>>,
+    /// tokenizer_config.json
+    pub tokenizer_config: Option<Vec<u8>>,
+}
+
 macro_rules! impl_from_safetensors_for_Llama {
     ($Param:ty) => {
         impl Llama<$Param> {
-            pub fn from_safetensors(model_dir: impl AsRef<Path>) -> Self {
-                let config = File::open(model_dir.as_ref().join("config.json")).unwrap();
-                let config: LlamaConfigJson = serde_json::from_reader(config).unwrap();
-                let model_file =
-                    std::fs::read(model_dir.as_ref().join("model.safetensors")).unwrap();
-                let safetensor = SafeTensors::deserialize(&model_file).unwrap();
+            pub fn from_safetensors(resources: &ModelResource) -> Self {
+                let config: LlamaConfigJson =
+                    serde_json::from_slice(resources.config.as_ref().unwrap().as_slice()).unwrap();
+                let safetensor =
+                    SafeTensors::deserialize(resources.model_data.as_ref().unwrap()).unwrap();
 
                 assert!(config.num_attention_heads % config.num_key_value_heads == 0);
                 Self {
@@ -614,7 +625,12 @@ pub fn test_load_safetensors_from_story_model() {
     let project_dir = env!("CARGO_MANIFEST_DIR");
     let model_dir = PathBuf::from(project_dir).join("../models").join("story");
     println!("{:?}", model_dir);
-    let model = Llama::<f32>::from_safetensors(model_dir);
+    let resources = ModelResource {
+        config: Some(std::fs::read(model_dir.join("config.json")).unwrap()),
+        model_data: Some(std::fs::read(model_dir.join("model.safetensors")).unwrap()),
+        ..Default::default()
+    };
+    let model = Llama::<f32>::from_safetensors(&resources);
     assert_eq!(model.vocab, 2048);
     assert_eq!(model.n_layers, 2);
     assert_eq!(model.n_q_h, 8);
@@ -690,7 +706,12 @@ pub fn test_load_safetensors_from_chat_model() {
         return;
     }
 
-    let model = Llama::<f32>::from_safetensors(model_dir);
+    let resources = ModelResource {
+        config: Some(std::fs::read(model_dir.join("config.json")).unwrap()),
+        model_data: Some(std::fs::read(model_dir.join("model.safetensors")).unwrap()),
+        ..Default::default()
+    };
+    let model = Llama::<f32>::from_safetensors(&resources);
     assert_eq!(model.vocab, 32002);
     assert_eq!(model.n_layers, 10);
     assert_eq!(model.n_q_h, 12);

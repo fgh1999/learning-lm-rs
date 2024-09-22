@@ -1,8 +1,9 @@
 use clap::Parser;
 use lm_infer_core::{
-    model::Llama,
+    model::{Llama, ModelResource},
     session::{LmSession, TokenGeneration},
 };
+use std::fs::read;
 use tokenizers::Tokenizer;
 
 #[derive(Parser, Debug)]
@@ -22,14 +23,20 @@ fn main() {
         model_dir.display()
     );
 
-    let llama = Llama::<f32>::from_safetensors(&model_dir);
-    let tokenizer = Tokenizer::from_file(model_dir.join("tokenizer.json")).unwrap();
+    let resources = ModelResource {
+        config: Some(read(model_dir.join("config.json")).unwrap()),
+        model_data: Some(read(model_dir.join("model.safetensors")).unwrap()),
+        tokenizer: Some(read(model_dir.join("tokenizer.json")).unwrap()),
+        ..Default::default()
+    };
+    let llama = Llama::<f32>::from_safetensors(&resources);
+    let tokenizer = Tokenizer::from_bytes(resources.tokenizer.as_ref().unwrap()).unwrap();
+    drop(resources);
+
     let mut sess = LmSession::new(llama.into());
-
-    let input = "Once upon a time, ";
-    print!("\n{input}");
-
     let input_ids = {
+        let input = "Once upon a time, ";
+        print!("\n{input}");
         let binding = tokenizer.encode(input, true).unwrap();
         binding.get_ids().to_owned()
     };

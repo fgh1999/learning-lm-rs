@@ -164,16 +164,17 @@ impl<
 
         // prefill
         while local_kv_cache.load_last_block() {
-            self.model
+            if let Some(mut logits) = self
+                .model
                 .forward_on_last_cache_block(&mut local_kv_cache, &mut buffer)
-                .map(|mut logits| {
-                    // get the last token's logits only at the end of the prompt tokens
-                    if let Some(repetition_penalty) = repetition_penalty {
-                        OP::repetition_penalty(&mut logits, repetition_penalty, &prompt_token_ids)
-                    }
-                    let next_token_id = OP::random_sample(&logits, top_p, top_k, temperature);
-                    result.push(next_token_id);
-                });
+            {
+                // get the last token's logits only at the end of the prompt tokens
+                if let Some(repetition_penalty) = repetition_penalty {
+                    OP::repetition_penalty(&mut logits, repetition_penalty, &prompt_token_ids)
+                }
+                let next_token_id = OP::random_sample(&logits, top_p, top_k, temperature);
+                result.push(next_token_id);
+            }
             local_kv_cache.try_sync_last_block_into_global();
         }
         local_kv_cache.append_token_ids(&result);

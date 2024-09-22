@@ -64,7 +64,7 @@ impl<T: Copy + Eq, P: Num + Copy + Default, const BLOCK_SIZE: BlockSize>
         T: 'a,
     {
         let token_ids = self.block.token_ids();
-        match token_ids.iter().zip(other).position(|(a, b)| !a.eq(&b)) {
+        match token_ids.iter().zip(other).position(|(a, b)| !a.eq(b)) {
             Some(i) => i,
             None => token_ids.len(),
         }
