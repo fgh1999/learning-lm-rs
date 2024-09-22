@@ -15,5 +15,5 @@ members = [
     "story-teller",
     "chat/chat-server",
     "chat/chat-cli",
-    #"story-teller-wasm",
+    "story-teller-wasm",
 ]

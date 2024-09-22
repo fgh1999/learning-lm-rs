@@ -17,3 +17,6 @@ rocket = "0.5.1"
 default = ["perf"]
 rayon = ["lm-infer-core/rayon"]
 perf = ["lm-infer-core/perf"]
+
+[profile.release]
+lto = true
