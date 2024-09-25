@@ -68,7 +68,7 @@ cargo r --release -- -m ../../models/tinyllama-chat-v1 --id user0
 1. Client1以`user1`为`session id`启动，触发Server`/createSession`。
 1. Client1输入问题，触发Server`/generate`，得到回复；
 1. Client0通过`:exit`退出；
-1. Client1通过`:exit`退出；
+1. Client1通过`:exit`退出。
 
 完整Client0输出:
 
@@ -169,10 +169,40 @@ cargo r --release -- -m ../../models/chat/
 
 ![RevertSessionInChat](./doc/figure/chat-revert.png)
 
+# KV Cache
+
+全局缓存使用前缀树管理，会话本地KVCacheBlock内所有token对应KV停止变更后尝试合入全局KVCache。
+
+![radixtreeForKvCache](./doc/figure/cachetree.png)
+
+如果会话本地的末块与全局前缀树上的KvCache同步失败，会触发：
+
+- 同步会话本地的stable blocks的末端为全局KVCache上相同序列的最新缓存；
+- 回收同步失败的本地末块中的可复用的计算结果。
+
+# 以WASM格式运行在支持WASI的LibOS上
+
+将故事生成服务编译到`wasm32-wasip1`上。
+```bash
+cd story-teller-wasm
+rustup target add wasm32-wasip1
+cargo b --release --target wasm32-wasip1
+```
+
+将得到的wasm binary编译为静态库后，与支持WASIp1的LibOS链接运行。
+
+```bash
+cd story-teller-wasm
+python3 client.py
+```
+
+客户端访问HTTP接口，得到生成的token id序列：
+
+![ResponseFromWasmStoryTellerService](./doc/figure/wasm-story-teller.png)
+
 # 测试
 
 - 添加各数据类型在各泛型算子上的简单测试；
-- 重写KvCache：全局缓存使用RadixTree管理；
 - 添加Tensor和sliced kvcache的视图读写trait，添加单元测试。
 - 通过rayon并行化部分算子，添加单元测试。
 
